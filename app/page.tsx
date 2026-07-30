@@ -1,21 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 type User = { name: string; role: "participant" | "admin" };
-type Auction = {
-  id: number;
-  make: string;
-  model: string;
-  year: string;
-  mileage: string;
-  fuel: string;
-  transmission: string;
-  price: number;
-  date: string;
-  time: string;
-  accent: string;
-};
+type Auction = { id: number; name: string; createdAt: string; participants: string[]; accent: string };
 
 const USERS: User[] = [
   { name: "Francesco Basis", role: "participant" },
@@ -26,28 +14,32 @@ const USERS: User[] = [
 ];
 
 const INITIAL_AUCTIONS: Auction[] = [
-  { id: 1, make: "Porsche", model: "911 Carrera 4S", year: "2021", mileage: "18.400", fuel: "Benzina", transmission: "PDK", price: 112000, date: "06 agosto", time: "18:30", accent: "#d9ff43" },
-  { id: 2, make: "BMW", model: "M3 Competition", year: "2022", mileage: "24.100", fuel: "Benzina", transmission: "Automatico", price: 64500, date: "08 agosto", time: "20:00", accent: "#ff6b35" },
-  { id: 3, make: "Mercedes-AMG", model: "GT 53 4MATIC+", year: "2020", mileage: "31.800", fuel: "Benzina", transmission: "Automatico", price: 78900, date: "12 agosto", time: "19:00", accent: "#70d7ff" },
+  { id: 1, name: "Supercar d'estate", createdAt: "30 luglio 2026", participants: [], accent: "#d9ff43" },
+  { id: 2, name: "Youngtimer italiane", createdAt: "29 luglio 2026", participants: [], accent: "#ff6b35" },
+  { id: 3, name: "Sportive tedesche", createdAt: "28 luglio 2026", participants: [], accent: "#70d7ff" },
 ];
 
-const money = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
-
-function Mark() {
-  return <div className="mark" aria-hidden="true"><span>AS</span></div>;
-}
+function Mark() { return <div className="mark" aria-hidden="true"><span>AS</span></div>; }
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [selectedName, setSelectedName] = useState(USERS[0].name);
   const [auctions, setAuctions] = useState<Auction[]>(INITIAL_AUCTIONS);
-  const [joined, setJoined] = useState<number[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     const savedAuctions = localStorage.getItem("auction-simulator-auctions");
     const savedUser = localStorage.getItem("auction-simulator-user");
-    if (savedAuctions) setAuctions(JSON.parse(savedAuctions));
+    if (savedAuctions) {
+      const parsed = JSON.parse(savedAuctions) as Array<Auction & { make?: string; model?: string }>;
+      setAuctions(parsed.map((auction) => ({
+        id: auction.id,
+        name: auction.name || [auction.make, auction.model].filter(Boolean).join(" ") || "Asta senza nome",
+        createdAt: auction.createdAt || "Creata in precedenza",
+        participants: auction.participants || [],
+        accent: auction.accent || "#d9ff43",
+      })));
+    }
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
 
@@ -64,84 +56,77 @@ export default function Home() {
     setShowForm(false);
   };
 
+  const saveAuctions = (updated: Auction[]) => {
+    setAuctions(updated);
+    localStorage.setItem("auction-simulator-auctions", JSON.stringify(updated));
+  };
+
   const addAuction = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const next: Auction = {
       id: Date.now(),
-      make: String(data.get("make")), model: String(data.get("model")),
-      year: String(data.get("year")), mileage: String(data.get("mileage")),
-      fuel: String(data.get("fuel")), transmission: String(data.get("transmission")),
-      price: Number(data.get("price")), date: String(data.get("date")),
-      time: String(data.get("time")), accent: "#d9ff43",
+      name: String(data.get("name")).trim(),
+      createdAt: new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long", year: "numeric" }).format(new Date()),
+      participants: [],
+      accent: "#d9ff43",
     };
-    const updated = [next, ...auctions];
-    setAuctions(updated);
-    localStorage.setItem("auction-simulator-auctions", JSON.stringify(updated));
+    saveAuctions([next, ...auctions]);
     setShowForm(false);
   };
 
-  const joinedSet = useMemo(() => new Set(joined), [joined]);
+  const toggleParticipation = (auctionId: number) => {
+    if (!user || user.role !== "participant") return;
+    saveAuctions(auctions.map((auction) => auction.id === auctionId ? {
+      ...auction,
+      participants: auction.participants.includes(user.name)
+        ? auction.participants.filter((name) => name !== user.name)
+        : [...auction.participants, user.name],
+    } : auction));
+  };
 
-  if (!user) {
-    return (
-      <main className="login-shell">
-        <div className="login-top"><Mark /><span>AUCTION<br />SIMULATOR</span></div>
-        <section className="login-card">
-          <div className="eyebrow"><i /> ACCESSO RISERVATO</div>
-          <h1>La griglia<br />è pronta.</h1>
-          <p>Scegli il tuo profilo per entrare nell&apos;area aste automobilistiche.</p>
-          <form onSubmit={enter}>
-            <label htmlFor="account">Profilo</label>
-            <div className="select-wrap">
-              <select id="account" value={selectedName} onChange={(e) => setSelectedName(e.target.value)}>
-                {USERS.map((entry) => <option key={entry.name}>{entry.name}</option>)}
-              </select>
-            </div>
-            <button className="primary" type="submit">ENTRA NEL PADDOCK <span>→</span></button>
-          </form>
-          <div className="access-note"><span>●</span><div><b>Accesso demo</b><small>Nessuna password richiesta</small></div></div>
-        </section>
-        <aside className="login-visual" aria-hidden="true">
-          <div className="speed-lines" />
-          <div className="car-silhouette"><div className="roof" /><div className="body" /><div className="wheel w1" /><div className="wheel w2" /></div>
-          <div className="lot-number">LOT<br /><strong>001</strong></div>
-          <p>CURATED CARS<br />FAIR BIDDING<br />PURE ADRENALINE</p>
-        </aside>
-      </main>
-    );
-  }
+  if (!user) return (
+    <main className="login-shell">
+      <div className="login-top"><Mark /><span>AUCTION<br />SIMULATOR</span></div>
+      <section className="login-card">
+        <div className="eyebrow"><i /> ACCESSO RISERVATO</div>
+        <h1>La griglia<br />è pronta.</h1>
+        <p>Scegli il tuo nome per entrare nella tua area personale.</p>
+        <form onSubmit={enter}>
+          <label htmlFor="account">Profilo</label>
+          <div className="select-wrap"><select id="account" value={selectedName} onChange={(e) => setSelectedName(e.target.value)}>{USERS.map((entry) => <option key={entry.name}>{entry.name}</option>)}</select></div>
+          <button className="primary" type="submit">ACCEDI <span>→</span></button>
+        </form>
+        <div className="access-note"><span>●</span><div><b>Accesso demo</b><small>Nessuna password richiesta</small></div></div>
+      </section>
+      <aside className="login-visual" aria-hidden="true"><div className="speed-lines" /><div className="car-silhouette"><div className="roof" /><div className="body" /><div className="wheel w1" /><div className="wheel w2" /></div><div className="lot-number">LOT<br /><strong>001</strong></div><p>CURATED CARS<br />FAIR BIDDING<br />PURE ADRENALINE</p></aside>
+    </main>
+  );
 
   const isAdmin = user.role === "admin";
   return (
     <main className="dashboard">
       <header>
         <div className="brand"><Mark /><span>AUCTION<br />SIMULATOR</span></div>
-        <div className="profile"><div className="avatar">{user.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}</div><div><b>{user.name}</b><small>{isAdmin ? "Amministratore" : "Partecipante"}</small></div><button onClick={logout} aria-label="Esci">↗</button></div>
+        <div className="profile"><div className="avatar">{user.name.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><div><b>{user.name}</b><small>{isAdmin ? "Amministratore" : "Partecipante"}</small></div><button onClick={logout} aria-label="Esci">↗</button></div>
       </header>
-
       <section className="hero-row">
-        <div><div className="eyebrow"><i /> {isAdmin ? "CABINA DI REGIA" : "PROSSIME PARTENZE"}</div><h1>{isAdmin ? "Gestisci le aste." : <>Pronto a<br /><em>rilanciare?</em></>}</h1><p>{isAdmin ? "Crea e controlla gli eventi disponibili per i partecipanti." : "Scopri le vetture selezionate e prenota il tuo posto in asta."}</p></div>
+        <div><div className="eyebrow"><i /> {isAdmin ? "AREA AMMINISTRATORE" : "AREA PARTECIPANTE"}</div><h1>{isAdmin ? "Crea le aste." : <>Scegli la tua<br /><em>prossima asta.</em></>}</h1><p>{isAdmin ? "Dai un nome a una nuova asta e pubblicala per tutti i partecipanti." : "Consulta le aste disponibili e conferma la tua partecipazione con un clic."}</p></div>
         <div className="stats"><div><strong>{auctions.length}</strong><span>ASTE<br />APERTE</span></div><div><strong>4</strong><span>PARTECIPANTI<br />ABILITATI</span></div></div>
       </section>
-
-      <section className="content-head">
-        <div><span className="section-number">01</span><h2>{isAdmin ? "Aste pubblicate" : "Aste disponibili"}</h2></div>
-        {isAdmin && <button className="primary compact" onClick={() => setShowForm(true)}>+ NUOVA ASTA</button>}
-      </section>
-
+      <section className="content-head"><div><span className="section-number">01</span><h2>{isAdmin ? "Aste create" : "Aste disponibili"}</h2></div>{isAdmin && <button className="primary compact" onClick={() => setShowForm(true)}>+ NUOVA ASTA</button>}</section>
       <section className="auction-grid">
-        {auctions.map((auction, index) => (
-          <article className="auction-card" key={auction.id} style={{ "--accent": auction.accent } as React.CSSProperties}>
-            <div className="card-top"><span>LOT {String(index + 1).padStart(3, "0")}</span><span className="live"><i /> APERTA</span></div>
-            <div className="car-art" aria-hidden="true"><div className="mini-car"><div className="mini-roof" /><div className="mini-body" /><div className="mini-wheel mw1" /><div className="mini-wheel mw2" /></div><span>{auction.make.slice(0, 1)}</span></div>
-            <div className="card-body"><small>{auction.make.toUpperCase()}</small><h3>{auction.model}</h3><div className="specs"><span>{auction.year}</span><span>{auction.mileage} km</span><span>{auction.fuel}</span><span>{auction.transmission}</span></div><div className="price"><span>BASE D&apos;ASTA</span><strong>{money.format(auction.price)}</strong></div></div>
-            <div className="card-footer"><div><small>DATA</small><b>{auction.date}</b></div><div><small>ORA</small><b>{auction.time}</b></div>{!isAdmin && <button className={joinedSet.has(auction.id) ? "joined" : ""} onClick={() => setJoined((old) => old.includes(auction.id) ? old.filter((id) => id !== auction.id) : [...old, auction.id])}>{joinedSet.has(auction.id) ? "ISCRITTO ✓" : "PARTECIPA →"}</button>}</div>
-          </article>
-        ))}
+        {auctions.map((auction, index) => {
+          const joined = auction.participants.includes(user.name);
+          return <article className="auction-card simple-auction" key={auction.id} style={{ "--accent": auction.accent } as React.CSSProperties}>
+            <div className="card-top"><span>ASTA {String(index + 1).padStart(3, "0")}</span><span className="live"><i /> APERTA</span></div>
+            <div className="auction-monogram" aria-hidden="true"><span>{auction.name.charAt(0).toUpperCase()}</span><i>{String(index + 1).padStart(2, "0")}</i></div>
+            <div className="card-body"><small>NOME DELL&apos;ASTA</small><h3>{auction.name}</h3><div className="auction-meta"><span>Creata il {auction.createdAt}</span><strong>{auction.participants.length} {auction.participants.length === 1 ? "partecipante" : "partecipanti"}</strong></div>{isAdmin && auction.participants.length > 0 && <div className="participant-list">{auction.participants.map((name) => <span key={name}>{name}</span>)}</div>}</div>
+            <div className="card-footer simple-footer"><div><small>STATO</small><b>Iscrizioni aperte</b></div>{!isAdmin && <button className={joined ? "joined" : ""} onClick={() => toggleParticipation(auction.id)}>{joined ? "PARTECIPO ✓" : "PARTECIPA →"}</button>}</div>
+          </article>;
+        })}
       </section>
-
-      {showForm && <div className="modal-backdrop" onMouseDown={() => setShowForm(false)}><section className="modal" onMouseDown={(e) => e.stopPropagation()}><button className="close" onClick={() => setShowForm(false)}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Crea un&apos;asta</h2><form onSubmit={addAuction}><div className="form-grid"><label>Marca<input name="make" placeholder="es. Ferrari" required /></label><label>Modello<input name="model" placeholder="es. Roma" required /></label><label>Anno<input name="year" type="number" placeholder="2023" required /></label><label>Chilometri<input name="mileage" placeholder="12.500" required /></label><label>Alimentazione<select name="fuel"><option>Benzina</option><option>Diesel</option><option>Ibrida</option><option>Elettrica</option></select></label><label>Cambio<select name="transmission"><option>Automatico</option><option>Manuale</option><option>PDK</option></select></label><label>Base d&apos;asta (€)<input name="price" type="number" placeholder="85000" required /></label><label>Data<input name="date" placeholder="18 agosto" required /></label><label>Ora<input name="time" type="time" required /></label></div><button className="primary" type="submit">PUBBLICA ASTA <span>→</span></button></form></section></div>}
+      {showForm && <div className="modal-backdrop" onMouseDown={() => setShowForm(false)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setShowForm(false)} aria-label="Chiudi">×</button><div className="eyebrow"><i /> NUOVA ASTA</div><h2>Crea un&apos;asta</h2><p>Scegli un nome chiaro: sarà subito visibile ai quattro partecipanti.</p><form onSubmit={addAuction}><label>Nome dell&apos;asta<input name="name" placeholder="es. Supercar d'estate" maxLength={60} autoFocus required /></label><button className="primary" type="submit">CREA ASTA <span>→</span></button></form></section></div>}
     </main>
   );
 }

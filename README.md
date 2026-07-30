@@ -22,4 +22,10 @@ pnpm install
 pnpm dev
 ```
 
-Il progetto è predisposto per una successiva pubblicazione. Prima dell'uso reale serviranno autenticazione e persistenza condivisa lato server.
+## Pubblicazione
+
+Ogni aggiornamento inviato al branch `main` viene pubblicato automaticamente su:
+
+https://basisfrancesco.github.io/Auction-Simulator/
+
+Nelle impostazioni del repository, GitHub Pages deve usare come origine **GitHub Actions**. Prima dell'uso reale serviranno autenticazione e persistenza condivisa lato server.
