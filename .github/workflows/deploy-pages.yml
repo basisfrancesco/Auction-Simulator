@@ -33,7 +33,7 @@ jobs:
           cache: pnpm
 
       - name: Installa le dipendenze
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Genera il sito statico
         run: pnpm build
