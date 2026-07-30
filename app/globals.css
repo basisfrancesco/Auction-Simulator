@@ -28,6 +28,7 @@ select:focus, input:focus { border-color:var(--ink); box-shadow:0 0 0 2px var(--
 .access-note div { display:flex; flex-direction:column; gap:3px; }
 .access-note b { font-size:11px; text-transform:uppercase; letter-spacing:1px; }
 .access-note small { color:var(--muted); }
+.connection-error{margin-top:16px;padding:13px 15px;background:#ffe0d8;border-left:4px solid #d84b2f;color:#7e2413;font-size:11px;line-height:1.45}.dashboard-error{margin:18px 0 0}.empty-state{grid-column:1/-1;border:1px dashed #aaa;padding:30px;color:var(--muted)}
 .login-visual { position:relative; background:var(--ink); color:white; overflow:hidden; }
 .login-visual:before { content:""; position:absolute; inset:0; background:linear-gradient(135deg,transparent 45%,rgba(217,255,67,.1)); }
 .speed-lines { position:absolute; inset:0; opacity:.12; background:repeating-linear-gradient(-17deg,transparent 0 46px,#fff 47px 48px); }
