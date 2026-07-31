@@ -206,12 +206,13 @@ export default function Home() {
     const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim(); const startedAt = Date.now();
     const current = auctions.find((item) => item.id === startAuctionId); const lotNumber = current && isBetweenLots(current) ? current.lotNumber + 1 : 1; const results = current?.results || [];
     const estimatedValue = price * 1.5;
+    const marketMood = .62 + Math.random() * .66;
     const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
-      name, budget: Math.round((estimatedValue * (.78 + Math.random() * .58)) / 100) * 100,
-      aggression: .2 + (index % 4) * .18 + Math.random() * .08,
-      interest: .22 + Math.random() * .7, patience: .25 + Math.random() * .7, heat: Math.random() * .45,
+      name, budget: Math.max(price + incrementFor(price, price), Math.round((estimatedValue * marketMood * (.72 + Math.random() * .35)) / 100) * 100),
+      aggression: Math.max(.08, .14 + (index % 4) * .16 + Math.random() * .1 + (marketMood - 1) * .18),
+      interest: Math.max(.08, Math.min(.98, .16 + Math.random() * .66 + (marketMood - 1) * .3)), patience: .18 + Math.random() * .76, heat: Math.random() * Math.max(.18, marketMood * .42),
     }));
-    const targetBids = 46 + Math.floor(Math.random() * 9); const startResult = await supabase.from("auctions").update({ status: "live", start_price: price, current_price: price, ends_at: new Date(startedAt + 10000).toISOString(), winner: null, target_bids: targetBids, bot_config: { bots, nextBotAt: startedAt + 800, vehicle, lotNumber, results, lotStartedAt: startedAt } }).eq("id", startAuctionId);
+    const targetBids = Math.max(12, Math.round(10 + marketMood * 24 + Math.random() * 22)); const startResult = await supabase.from("auctions").update({ status: "live", start_price: price, current_price: price, ends_at: new Date(startedAt + 10000).toISOString(), winner: null, target_bids: targetBids, bot_config: { bots, nextBotAt: startedAt + 800, vehicle, lotNumber, results, lotStartedAt: startedAt } }).eq("id", startAuctionId);
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
     setFocusedId(startAuctionId); setStartAuctionId(null);
   };
