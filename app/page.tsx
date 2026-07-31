@@ -5,7 +5,7 @@ import { supabase } from "./supabase";
 
 type User = { name: string; role: "participant" | "admin" };
 type Bid = { id: string; bidder: string; amount: number; at: number; bot: boolean };
-type Bot = { name: string; budget: number; aggression: number };
+type Bot = { name: string; budget: number; aggression: number; interest?: number; patience?: number; heat?: number };
 type LotResult = { lotNumber: number; vehicle: string; winner: string; finalPrice: number; bidCount: number };
 type GarageCar = { id: string; vehicle: string; purchasePrice: number; auctionName: string; imageUrl: string };
 type Auction = {
@@ -162,17 +162,30 @@ export default function Home() {
           }
         } else if (tick >= auction.nextBotAt && auction.bids.filter((bid) => bid.bot).length < auction.targetBids) {
           const step = incrementFor(auction.currentPrice, auction.startPrice); const lastBidder = auction.bids[0]?.bidder;
-          const eligible = auction.bots.filter((bot) => bot.name !== lastBidder && bot.budget >= auction.currentPrice + step && Math.random() < (.5 + bot.aggression * .45));
+          const evolvedBots = auction.bots.map((bot) => ({ ...bot, heat: Math.max(0, Math.min(1, (bot.heat ?? .25) + (Math.random() - .53) * .22)) }));
+          const eligible = evolvedBots.filter((bot) => {
+            if (bot.name === lastBidder || bot.budget < auction.currentPrice + step) return false;
+            const headroom = Math.max(0, (bot.budget - auction.currentPrice) / bot.budget);
+            const interest = bot.interest ?? .55; const patience = bot.patience ?? .5; const heat = bot.heat ?? .25;
+            const nearLimitPenalty = headroom < .08 ? .42 : headroom < .18 ? .2 : 0;
+            const hesitation = Math.random() < (1 - patience) * .18;
+            const desire = Math.max(.06, Math.min(.9, .12 + interest * .46 + bot.aggression * .22 + heat * .25 - nearLimitPenalty));
+            return !hesitation && Math.random() < desire;
+          });
           if (eligible.length) {
-            const bot = eligible[Math.floor(Math.random() * eligible.length)]; const multiplier = Math.random() < bot.aggression * .22 ? (Math.random() < .78 ? 2 : 3) : 1;
+            const bot = eligible[Math.floor(Math.random() * eligible.length)]; const multiplier = Math.random() < bot.aggression * (.16 + (bot.heat ?? .25) * .18) ? (Math.random() < .8 ? 2 : 3) : 1;
             const amount = Math.min(bot.budget, auction.currentPrice + step * multiplier); const progress = (auction.bids.filter((bid) => bid.bot).length + 1) / auction.targetBids;
-            const delay = progress < .3 ? 650 + Math.random() * 900 : progress < .75 ? 1000 + Math.random() * 1900 : 1800 + Math.random() * 4200;
+            const mood = (bot.interest ?? .55) + (bot.heat ?? .25); const delay = progress < .3 ? 550 + Math.random() * 1300 : progress < .75 ? 900 + Math.random() * (2800 - mood * 600) : 1700 + Math.random() * (5200 - mood * 1100);
             const endsAt = tick + 10000; const nextBotAt = tick + delay;
-            const advanceAuction = await supabase.from("auctions").update({ current_price: amount, ends_at: new Date(endsAt).toISOString(), bot_config: { bots: auction.bots, nextBotAt, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", auction.currentPrice).select("id");
+            const nextBots = evolvedBots.map((entry) => entry.name === bot.name ? { ...entry, heat: Math.min(1, (entry.heat ?? .25) + .18 + Math.random() * .18) } : entry);
+            const advanceAuction = await supabase.from("auctions").update({ current_price: amount, ends_at: new Date(endsAt).toISOString(), bot_config: { bots: nextBots, nextBotAt, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", auction.currentPrice).select("id");
             if (advanceAuction.error) setConnectionError(`Aggiornamento asta: ${advanceAuction.error.message}`);
             if (!advanceAuction.data?.length) return;
             const bidInsert = await supabase.from("bids").insert({ auction_id: auction.id, bidder_name: bot.name, amount, is_bot: true });
             if (bidInsert.error) setConnectionError(`Offerta bot: ${bidInsert.error.message}`);
+          } else {
+            const hesitation = tick + 600 + Math.random() * 1800;
+            await supabase.from("auctions").update({ bot_config: { bots: evolvedBots, nextBotAt: hesitation, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", auction.currentPrice);
           }
         }
       } finally { engineBusy.current = false; }
@@ -193,7 +206,11 @@ export default function Home() {
     const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim(); const startedAt = Date.now();
     const current = auctions.find((item) => item.id === startAuctionId); const lotNumber = current && isBetweenLots(current) ? current.lotNumber + 1 : 1; const results = current?.results || [];
     const estimatedValue = price * 1.5;
-    const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({ name, budget: Math.round((estimatedValue * (.82 + Math.random() * .48)) / 100) * 100, aggression: .25 + (index % 4) * .18 }));
+    const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
+      name, budget: Math.round((estimatedValue * (.78 + Math.random() * .58)) / 100) * 100,
+      aggression: .2 + (index % 4) * .18 + Math.random() * .08,
+      interest: .22 + Math.random() * .7, patience: .25 + Math.random() * .7, heat: Math.random() * .45,
+    }));
     const targetBids = 46 + Math.floor(Math.random() * 9); const startResult = await supabase.from("auctions").update({ status: "live", start_price: price, current_price: price, ends_at: new Date(startedAt + 10000).toISOString(), winner: null, target_bids: targetBids, bot_config: { bots, nextBotAt: startedAt + 800, vehicle, lotNumber, results, lotStartedAt: startedAt } }).eq("id", startAuctionId);
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
     setFocusedId(startAuctionId); setStartAuctionId(null);
