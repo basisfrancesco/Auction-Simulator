@@ -149,16 +149,17 @@ export default function Home() {
       try {
         if (tick >= auction.endsAt) {
           const winner = auction.bids[0]?.bidder || "Nessun offerente";
-          const result: LotResult = { lotNumber: auction.lotNumber, vehicle: auction.vehicle, winner, finalPrice: auction.currentPrice, bidCount: auction.bids.length };
-          const closing = await supabase.from("auctions").update({ status: "waiting", winner, bot_config: { bots: [], nextBotAt: 0, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: [...auction.results, result], lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").select("id");
+          const sequentialLotNumber = auction.results.length + 1;
+          const result: LotResult = { lotNumber: sequentialLotNumber, vehicle: auction.vehicle, winner, finalPrice: auction.currentPrice, bidCount: auction.bids.length };
+          const closing = await supabase.from("auctions").update({ status: "waiting", winner, bot_config: { bots: [], nextBotAt: 0, vehicle: auction.vehicle, lotNumber: sequentialLotNumber, results: [...auction.results, result], lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").select("id");
           if (closing.error) { setConnectionError(`Chiusura lotto: ${closing.error.message}`); return; }
           if (!closing.data?.length) return;
           if (USERS.some((entry) => entry.role === "participant" && entry.name === winner)) {
-            const garageInsert = await supabase.from("garage_cars").insert({ owner_name: winner, auction_id: auction.id, auction_name: auction.name, lot_number: auction.lotNumber, vehicle: auction.vehicle, purchase_price: auction.currentPrice });
+            const garageInsert = await supabase.from("garage_cars").insert({ owner_name: winner, auction_id: auction.id, auction_name: auction.name, lot_number: sequentialLotNumber, vehicle: auction.vehicle, purchase_price: auction.currentPrice });
             if (!garageInsert.error) {
               const account = await supabase.from("participant_accounts").select("balance").eq("name", winner).single();
               if (account.data) await supabase.from("participant_accounts").update({ balance: Math.max(0, Number(account.data.balance) - auction.currentPrice) }).eq("name", winner);
-            }
+            } else setConnectionError(`Assegnazione garage: ${garageInsert.error.message}`);
           }
         } else if (tick >= auction.nextBotAt && auction.bids.filter((bid) => bid.bot).length < auction.targetBids) {
           const step = incrementFor(auction.currentPrice, auction.startPrice); const lastBidder = auction.bids[0]?.bidder;
@@ -204,7 +205,7 @@ export default function Home() {
   const startAuction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (startAuctionId === null) return;
     const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim(); const startedAt = Date.now();
-    const current = auctions.find((item) => item.id === startAuctionId); const lotNumber = current && isBetweenLots(current) ? current.lotNumber + 1 : 1; const results = current?.results || [];
+    const current = auctions.find((item) => item.id === startAuctionId); const results = current?.results || []; const lotNumber = results.length + 1;
     const estimatedValue = price * 1.5;
     const marketMood = .62 + Math.random() * .66;
     const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
