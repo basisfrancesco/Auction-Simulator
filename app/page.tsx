@@ -50,6 +50,7 @@ export default function Home() {
   const auctionsRef = useRef<Auction[]>([]);
   const engineBusy = useRef(false);
   const bidBusy = useRef(false);
+  const realtimeRefresh = useRef<number | null>(null);
 
   useEffect(() => { auctionsRef.current = auctions; }, [auctions]);
   useEffect(() => {
@@ -112,6 +113,10 @@ export default function Home() {
     });
     setAuctions(mapped); setConnectionError("");
   };
+  const scheduleAuctionRefresh = () => {
+    if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current);
+    realtimeRefresh.current = window.setTimeout(() => void loadAuctions(), 120);
+  };
 
   useEffect(() => {
     const savedUser = localStorage.getItem("auction-simulator-user");
@@ -123,11 +128,11 @@ export default function Home() {
     };
     void connect();
     const channel = supabase.channel("auction-simulator-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "auctions" }, () => void loadAuctions())
-      .on("postgres_changes", { event: "*", schema: "public", table: "auction_participants" }, () => void loadAuctions())
-      .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, () => void loadAuctions())
+      .on("postgres_changes", { event: "*", schema: "public", table: "auctions" }, scheduleAuctionRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "auction_participants" }, scheduleAuctionRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, scheduleAuctionRefresh)
       .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+    return () => { if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current); void supabase.removeChannel(channel); };
   }, []);
 
   useEffect(() => { if (user?.role === "participant") void loadParticipantProfile(user.name); }, [user]);
@@ -225,22 +230,10 @@ export default function Home() {
     if (!user || user.role !== "participant" || auction.status !== "live" || !auction.participants.includes(user.name) || bidBusy.current || auction.bids[0]?.bidder === user.name || optimisticLeader === `${auction.id}:${auction.lotNumber}`) return;
     bidBusy.current = true;
     try {
-      let latestQuery = supabase.from("bids").select("bidder_name,amount").eq("auction_id", auction.id).order("created_at", { ascending: false }).limit(1);
-      if (auction.lotStartedAt) latestQuery = latestQuery.gte("created_at", new Date(auction.lotStartedAt).toISOString());
-      const [{ data }, latestResult] = await Promise.all([
-        supabase.auth.getUser(),
-        latestQuery.maybeSingle(),
-      ]);
-      if (!data.user || latestResult.data?.bidder_name === user.name) return;
-      const currentPrice = Math.max(auction.currentPrice, Number(latestResult.data?.amount || 0));
-      const amount = currentPrice + incrementFor(currentPrice, auction.startPrice); const time = Date.now();
-      if (amount > balance) { setConnectionError("Saldo insufficiente per questa offerta."); return; }
-      const claim = await supabase.from("auctions").update({ current_price: amount, ends_at: new Date(time + 10000).toISOString(), bot_config: { bots: auction.bots, nextBotAt: Math.max(auction.nextBotAt, time + 800), vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", currentPrice).select("id");
-      if (claim.error) { setConnectionError(`Offerta: ${claim.error.message}`); return; }
-      if (!claim.data?.length) { await loadAuctions(); return; }
-      const insert = await supabase.from("bids").insert({ auction_id: auction.id, bidder_id: data.user.id, bidder_name: user.name, amount, is_bot: false });
-      if (insert.error) setConnectionError(`Offerta: ${insert.error.message}`);
-      else setOptimisticLeader(`${auction.id}:${auction.lotNumber}`);
+      const { data } = await supabase.auth.getUser(); if (!data.user) return;
+      const result = await supabase.rpc("place_participant_bid", { p_auction_id: auction.id, p_bidder_id: data.user.id, p_bidder_name: user.name });
+      if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); await loadAuctions(); return; }
+      setOptimisticLeader(`${auction.id}:${auction.lotNumber}`); setConnectionError("");
       await loadAuctions();
     } finally { bidBusy.current = false; }
   };
