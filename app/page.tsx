@@ -8,6 +8,7 @@ type Bid = { id: string; bidder: string; amount: number; at: number; bot: boolea
 type Bot = { name: string; budget: number; aggression: number; interest?: number; patience?: number; heat?: number };
 type LotResult = { lotNumber: number; vehicle: string; winner: string; finalPrice: number; bidCount: number };
 type GarageCar = { id: string; vehicle: string; purchasePrice: number; auctionName: string; imageUrl: string };
+type CarListing = { id: string; carId: string; sellerName: string; vehicle: string; imageUrl: string; price: number; createdAt: string };
 type Auction = {
   id: string; name: string; createdAt: string; participants: string[]; accent: string;
   status: "waiting" | "live" | "between" | "closed"; startPrice: number; currentPrice: number;
@@ -19,6 +20,7 @@ type Auction = {
 const USERS: User[] = [
   { name: "Francesco Basis", role: "participant" }, { name: "Vittorio Esposito", role: "participant" },
   { name: "Carlo Esposito", role: "participant" }, { name: "Lorenzo Biava", role: "participant" },
+  { name: "Giulia Test", role: "participant" }, { name: "Matteo Test", role: "participant" },
   { name: "Admin", role: "admin" },
 ];
 const BOT_NAMES = ["Marco Rinaldi", "Andrea Costa", "Giulia Ferri", "Luca Romano", "Davide Conti", "Elena Moretti", "Simone Gallo", "Matteo De Luca", "Sofia Ricci", "Alessandro Greco"];
@@ -40,23 +42,32 @@ export default function Home() {
   const [connectionError, setConnectionError] = useState("");
   const [balance, setBalance] = useState(250000);
   const [garage, setGarage] = useState<GarageCar[]>([]);
+  const [listings, setListings] = useState<CarListing[]>([]);
   const [garageOpen, setGarageOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
   const [sellCarId, setSellCarId] = useState<string | null>(null);
+  const [marketPending, setMarketPending] = useState<string | null>(null);
   const [optimisticLeader, setOptimisticLeader] = useState("");
+  const [bidPending, setBidPending] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [startAuctionId, setStartAuctionId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(0);
   const auctionsRef = useRef<Auction[]>([]);
   const engineBusy = useRef(false);
   const bidBusy = useRef(false);
+  const loadSequence = useRef(0);
+  const serverOffset = useRef(0);
   const realtimeRefresh = useRef<number | null>(null);
 
   useEffect(() => { auctionsRef.current = auctions; }, [auctions]);
   useEffect(() => {
     if (!optimisticLeader || !user) return;
-    const auction = auctions.find((item) => `${item.id}:${item.lotNumber}` === optimisticLeader);
-    if (auction?.bids[0] && auction.bids[0].bidder !== user.name) setOptimisticLeader("");
+    const timeout = window.setTimeout(() => {
+      const auction = auctions.find((item) => `${item.id}:${item.lotNumber}` === optimisticLeader);
+      if (auction?.bids[0] && auction.bids[0].bidder !== user.name) setOptimisticLeader("");
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [auctions, optimisticLeader, user]);
 
   const loadParticipantProfile = async (name: string) => {
@@ -67,11 +78,17 @@ export default function Home() {
     if (cars.data) setGarage(cars.data.map((car) => ({ id: String(car.id), vehicle: car.vehicle, purchasePrice: Number(car.purchase_price), auctionName: car.auction_name, imageUrl: car.image_url || "" })));
   };
 
+  const loadMarketplace = async () => {
+    const result = await supabase.from("car_listings").select("*").eq("status", "active").order("created_at", { ascending: false });
+    if (result.error) { setConnectionError(`Mercato: ${result.error.message}`); return; }
+    setListings((result.data || []).map((listing) => ({ id: String(listing.id), carId: String(listing.car_id), sellerName: listing.seller_name, vehicle: listing.vehicle, imageUrl: listing.image_url || "", price: Number(listing.price), createdAt: new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "short" }).format(new Date(listing.created_at)) })));
+  };
+
   const uploadCarImage = async (car: GarageCar, file?: File) => {
     if (!user || !file) return;
     if (!file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) { setConnectionError("La foto deve essere un’immagine di massimo 5 MB."); return; }
     const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
-    const path = `${user.name.replaceAll(" ", "-").toLowerCase()}/${car.id}-${Date.now()}.${extension}`;
+    const path = `${user.name.replaceAll(" ", "-").toLowerCase()}/${car.id}-${file.lastModified}.${extension}`;
     const upload = await supabase.storage.from("garage-images").upload(path, file, { upsert: true });
     if (upload.error) { setConnectionError(`Foto garage: ${upload.error.message}`); return; }
     const imageUrl = supabase.storage.from("garage-images").getPublicUrl(path).data.publicUrl;
@@ -79,23 +96,45 @@ export default function Home() {
     if (update.error) setConnectionError(`Foto garage: ${update.error.message}`); else await loadParticipantProfile(user.name);
   };
 
-  const sellCar = async (event: FormEvent<HTMLFormElement>) => {
+  const listCar = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (!user || !sellCarId) return;
     const price = Number(new FormData(event.currentTarget).get("salePrice")); if (price <= 0) return;
-    const sale = await supabase.from("garage_cars").update({ sold_at: new Date().toISOString(), sale_price: price }).eq("id", sellCarId).eq("owner_name", user.name).is("sold_at", null).select("id");
-    if (sale.error || !sale.data?.length) { setConnectionError(sale.error?.message || "Questa automobile risulta già venduta."); return; }
-    const credit = await supabase.from("participant_accounts").update({ balance: balance + price }).eq("name", user.name);
-    if (credit.error) setConnectionError(`Accredito vendita: ${credit.error.message}`); else { setSellCarId(null); await loadParticipantProfile(user.name); }
+    setMarketPending(sellCarId);
+    const result = await supabase.rpc("list_car_for_sale", { p_car_id: sellCarId, p_seller_name: user.name, p_price: price });
+    setMarketPending(null);
+    if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); return; }
+    setSellCarId(null); setMarketOpen(true); setGarageOpen(false); await loadMarketplace();
+  };
+
+  const buyCar = async (listing: CarListing) => {
+    if (!user || listing.sellerName === user.name || marketPending) return;
+    setMarketPending(listing.id);
+    const result = await supabase.rpc("buy_listed_car", { p_listing_id: listing.id, p_buyer_name: user.name });
+    setMarketPending(null);
+    if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); await loadMarketplace(); return; }
+    setConnectionError(""); await Promise.all([loadMarketplace(), loadParticipantProfile(user.name)]);
+  };
+
+  const cancelListing = async (listing: CarListing) => {
+    if (marketPending) return; setMarketPending(listing.id);
+    const result = await supabase.rpc("cancel_car_listing", { p_listing_id: listing.id, p_seller_name: user?.name }); setMarketPending(null);
+    if (result.error) setConnectionError(result.error.message.replace("P0001: ", "")); else await loadMarketplace();
   };
 
   const loadAuctions = async () => {
-    const [auctionResult, participantResult, bidResult] = await Promise.all([
+    const sequence = ++loadSequence.current;
+    const requestedAt = Date.now();
+    const [auctionResult, participantResult, bidResult, serverTimeResult] = await Promise.all([
       supabase.from("auctions").select("*").order("created_at", { ascending: false }),
       supabase.from("auction_participants").select("auction_id,user_name"),
       supabase.from("bids").select("*").order("created_at", { ascending: false }),
+      supabase.rpc("auction_server_now_ms"),
     ]);
-    const error = auctionResult.error || participantResult.error || bidResult.error;
+    if (sequence !== loadSequence.current) return;
+    const error = auctionResult.error || participantResult.error || bidResult.error || serverTimeResult.error;
     if (error) { setConnectionError(`Supabase: ${error.message}`); return; }
+    const receivedAt = Date.now();
+    serverOffset.current = Number(serverTimeResult.data) - Math.round((requestedAt + receivedAt) / 2);
     const participants = participantResult.data || []; const bids = bidResult.data || [];
     const colors = ["#d9ff43", "#ff6b35", "#70d7ff"];
     const mapped: Auction[] = (auctionResult.data || []).map((row, index) => {
@@ -124,18 +163,23 @@ export default function Home() {
       const { data } = await supabase.auth.getSession();
       if (savedUser && !data.session) await supabase.auth.signInAnonymously();
       if (savedUser) setUser(JSON.parse(savedUser));
-      await loadAuctions();
+      await Promise.all([loadAuctions(), loadMarketplace()]);
     };
     void connect();
     const channel = supabase.channel("auction-simulator-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "auctions" }, scheduleAuctionRefresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "auction_participants" }, scheduleAuctionRefresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, scheduleAuctionRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "car_listings" }, () => void loadMarketplace())
       .subscribe();
     return () => { if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current); void supabase.removeChannel(channel); };
   }, []);
 
-  useEffect(() => { if (user?.role === "participant") void loadParticipantProfile(user.name); }, [user]);
+  useEffect(() => {
+    if (user?.role !== "participant") return;
+    const timeout = window.setTimeout(() => void loadParticipantProfile(user.name), 0);
+    return () => window.clearTimeout(timeout);
+  }, [user]);
   useEffect(() => {
     if (user?.role !== "participant") return;
     const channel = supabase.channel(`profile-${user.name}`)
@@ -147,25 +191,19 @@ export default function Home() {
 
   useEffect(() => {
     const advance = async () => {
-      const tick = Date.now(); setNow(tick);
+      const tick = Date.now() + serverOffset.current; setNow(tick);
       if (!user || engineBusy.current) return;
-      const auction = auctionsRef.current.find((item) => item.status === "live"); if (!auction) return;
+      const auction = auctionsRef.current
+        .filter((item) => item.status === "live")
+        .sort((left, right) => Math.min(left.endsAt, left.nextBotAt) - Math.min(right.endsAt, right.nextBotAt))
+        .find((item) => tick >= item.endsAt || tick >= item.nextBotAt);
+      if (!auction) return;
       engineBusy.current = true;
       try {
         if (tick >= auction.endsAt) {
-          const winner = auction.bids[0]?.bidder || "Nessun offerente";
-          const sequentialLotNumber = auction.results.length + 1;
-          const result: LotResult = { lotNumber: sequentialLotNumber, vehicle: auction.vehicle, winner, finalPrice: auction.currentPrice, bidCount: auction.bids.length };
-          const closing = await supabase.from("auctions").update({ status: "waiting", winner, bot_config: { bots: [], nextBotAt: 0, vehicle: auction.vehicle, lotNumber: sequentialLotNumber, results: [...auction.results, result], lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").select("id");
+          const closing = await supabase.rpc("close_auction_lot", { p_auction_id: auction.id });
           if (closing.error) { setConnectionError(`Chiusura lotto: ${closing.error.message}`); return; }
-          if (!closing.data?.length) return;
-          if (USERS.some((entry) => entry.role === "participant" && entry.name === winner)) {
-            const garageInsert = await supabase.from("garage_cars").insert({ owner_name: winner, auction_id: auction.id, auction_name: auction.name, lot_number: sequentialLotNumber, vehicle: auction.vehicle, purchase_price: auction.currentPrice });
-            if (!garageInsert.error) {
-              const account = await supabase.from("participant_accounts").select("balance").eq("name", winner).single();
-              if (account.data) await supabase.from("participant_accounts").update({ balance: Math.max(0, Number(account.data.balance) - auction.currentPrice) }).eq("name", winner);
-            } else setConnectionError(`Assegnazione garage: ${garageInsert.error.message}`);
-          }
+          if (closing.data) await loadAuctions();
         } else if (tick >= auction.nextBotAt && auction.bids.filter((bid) => bid.bot).length < auction.targetBids) {
           const step = incrementFor(auction.currentPrice, auction.startPrice); const lastBidder = auction.bids[0]?.bidder;
           const evolvedBots = auction.bots.map((bot) => ({ ...bot, heat: Math.max(0, Math.min(1, (bot.heat ?? .25) + (Math.random() - .53) * .22)) }));
@@ -182,16 +220,13 @@ export default function Home() {
             const bot = eligible[Math.floor(Math.random() * eligible.length)]; const multiplier = Math.random() < bot.aggression * (.16 + (bot.heat ?? .25) * .18) ? (Math.random() < .8 ? 2 : 3) : 1;
             const amount = Math.min(bot.budget, auction.currentPrice + step * multiplier); const progress = (auction.bids.filter((bid) => bid.bot).length + 1) / auction.targetBids;
             const mood = (bot.interest ?? .55) + (bot.heat ?? .25); const delay = progress < .3 ? 550 + Math.random() * 1300 : progress < .75 ? 900 + Math.random() * (2800 - mood * 600) : 1700 + Math.random() * (5200 - mood * 1100);
-            const endsAt = tick + 10000; const nextBotAt = tick + delay;
+            const nextBotAt = tick + delay;
             const nextBots = evolvedBots.map((entry) => entry.name === bot.name ? { ...entry, heat: Math.min(1, (entry.heat ?? .25) + .18 + Math.random() * .18) } : entry);
-            const advanceAuction = await supabase.from("auctions").update({ current_price: amount, ends_at: new Date(endsAt).toISOString(), bot_config: { bots: nextBots, nextBotAt, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", auction.currentPrice).select("id");
-            if (advanceAuction.error) setConnectionError(`Aggiornamento asta: ${advanceAuction.error.message}`);
-            if (!advanceAuction.data?.length) return;
-            const bidInsert = await supabase.from("bids").insert({ auction_id: auction.id, bidder_name: bot.name, amount, is_bot: true });
-            if (bidInsert.error) setConnectionError(`Offerta bot: ${bidInsert.error.message}`);
+            const advanceAuction = await supabase.rpc("place_bot_bid", { p_auction_id: auction.id, p_expected_price: auction.currentPrice, p_bidder_name: bot.name, p_amount: amount, p_bots: nextBots, p_next_bot_at: Math.round(nextBotAt) });
+            if (advanceAuction.error) setConnectionError(`Offerta bot: ${advanceAuction.error.message}`);
           } else {
             const hesitation = tick + 600 + Math.random() * 1800;
-            await supabase.from("auctions").update({ bot_config: { bots: evolvedBots, nextBotAt: hesitation, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id).eq("status", "live").eq("current_price", auction.currentPrice);
+            await supabase.rpc("schedule_bot_attempt", { p_auction_id: auction.id, p_expected_price: auction.currentPrice, p_bots: evolvedBots, p_next_bot_at: Math.round(hesitation) });
           }
         }
       } finally { engineBusy.current = false; }
@@ -200,8 +235,8 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [user]);
 
-  const enter = async (event: FormEvent) => { event.preventDefault(); const next = USERS.find((entry) => entry.name === selectedName) ?? USERS[0]; const { data } = await supabase.auth.getSession(); if (!data.session) { const result = await supabase.auth.signInAnonymously(); if (result.error) { setConnectionError(result.error.message); return; } } localStorage.setItem("auction-simulator-user", JSON.stringify(next)); setUser(next); await loadAuctions(); };
-  const logout = () => { localStorage.removeItem("auction-simulator-user"); setUser(null); setFocusedId(null); setGarageOpen(false); };
+  const enter = async (event: FormEvent) => { event.preventDefault(); const next = USERS.find((entry) => entry.name === selectedName) ?? USERS[0]; const { data } = await supabase.auth.getSession(); if (!data.session) { const result = await supabase.auth.signInAnonymously(); if (result.error) { setConnectionError(result.error.message); return; } } localStorage.setItem("auction-simulator-user", JSON.stringify(next)); setUser(next); await Promise.all([loadAuctions(), loadMarketplace()]); };
+  const logout = () => { localStorage.removeItem("auction-simulator-user"); setUser(null); setFocusedId(null); setGarageOpen(false); setMarketOpen(false); };
   const addAuction = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const name = String(new FormData(event.currentTarget).get("name")).trim();
     void supabase.from("auctions").insert({ name }).then(({ error }) => { if (error) setConnectionError(error.message); else { setShowCreate(false); void loadAuctions(); } });
@@ -209,8 +244,7 @@ export default function Home() {
   const toggleParticipation = async (id: string) => { if (!user || user.role !== "participant") return; const { data } = await supabase.auth.getUser(); if (!data.user) return; const auction = auctions.find((item) => item.id === id); if (auction?.participants.includes(user.name)) await supabase.from("auction_participants").delete().eq("auction_id", id).eq("user_id", data.user.id); else await supabase.from("auction_participants").insert({ auction_id: id, user_id: data.user.id, user_name: user.name }); await loadAuctions(); };
   const startAuction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (startAuctionId === null) return;
-    const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim(); const startedAt = Date.now();
-    const current = auctions.find((item) => item.id === startAuctionId); const results = current?.results || []; const lotNumber = results.length + 1;
+    const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim();
     const estimatedValue = price * 1.5;
     const marketMood = .62 + Math.random() * .66;
     const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
@@ -218,7 +252,7 @@ export default function Home() {
       aggression: Math.max(.08, .14 + (index % 4) * .16 + Math.random() * .1 + (marketMood - 1) * .18),
       interest: Math.max(.08, Math.min(.98, .16 + Math.random() * .66 + (marketMood - 1) * .3)), patience: .18 + Math.random() * .76, heat: Math.random() * Math.max(.18, marketMood * .42),
     }));
-    const targetBids = Math.max(12, Math.round(10 + marketMood * 24 + Math.random() * 22)); const startResult = await supabase.from("auctions").update({ status: "live", start_price: price, current_price: price, ends_at: new Date(startedAt + 10000).toISOString(), winner: null, target_bids: targetBids, bot_config: { bots, nextBotAt: startedAt + 800, vehicle, lotNumber, results, lotStartedAt: startedAt } }).eq("id", startAuctionId);
+    const targetBids = Math.max(12, Math.round(10 + marketMood * 24 + Math.random() * 22)); const startResult = await supabase.rpc("start_auction_lot", { p_auction_id: startAuctionId, p_vehicle: vehicle, p_start_price: price, p_target_bids: targetBids, p_bots: bots });
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
     setFocusedId(startAuctionId); setStartAuctionId(null);
   };
@@ -228,33 +262,35 @@ export default function Home() {
   };
   const placeBid = async (auction: Auction) => {
     if (!user || user.role !== "participant" || auction.status !== "live" || !auction.participants.includes(user.name) || bidBusy.current || auction.bids[0]?.bidder === user.name || optimisticLeader === `${auction.id}:${auction.lotNumber}`) return;
-    bidBusy.current = true;
+    bidBusy.current = true; setBidPending(true);
     try {
       const { data } = await supabase.auth.getUser(); if (!data.user) return;
       const result = await supabase.rpc("place_participant_bid", { p_auction_id: auction.id, p_bidder_id: data.user.id, p_bidder_name: user.name });
       if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); await loadAuctions(); return; }
       setOptimisticLeader(`${auction.id}:${auction.lotNumber}`); setConnectionError("");
       await loadAuctions();
-    } finally { bidBusy.current = false; }
+    } finally { bidBusy.current = false; setBidPending(false); }
   };
 
   const focused = useMemo(() => auctions.find((auction) => auction.id === focusedId) || null, [auctions, focusedId]);
+  const listedCarIds = useMemo(() => new Set(listings.filter((listing) => listing.sellerName === user?.name).map((listing) => listing.carId)), [listings, user]);
   const isUserLeading = (auction: Auction) => auction.bids[0]?.bidder === user?.name || optimisticLeader === `${auction.id}:${auction.lotNumber}`;
   const lobbyTitle = (auction: Auction) => auction.status === "live" ? "Il lotto è aperto" : isBetweenLots(auction) ? "Lotto aggiudicato" : auction.status === "closed" ? "Asta terminata" : "La lobby è aperta";
   const lobbyCopy = (auction: Auction) => auction.status === "live" ? "Segui i rilanci in tempo reale e alza la paletta quando vuoi intervenire." : isBetweenLots(auction) ? "L’admin sta preparando la prossima automobile. Rimani nella lobby." : auction.status === "closed" ? "Consulta lo storico completo delle automobili aggiudicate." : "L’admin sta preparando il primo lotto. L’asta inizierà automaticamente.";
   if (!user) return <main className="login-shell"><div className="login-top"><Mark /><span>AUCTION<br />SIMULATOR</span></div><section className="login-card"><div className="eyebrow"><i /> ACCESSO RISERVATO</div><h1>La griglia<br />è pronta.</h1><p>Scegli il tuo nome per entrare nella tua area personale.</p><form onSubmit={enter}><label htmlFor="account">Profilo</label><div className="select-wrap"><select id="account" value={selectedName} onChange={(event) => setSelectedName(event.target.value)}>{USERS.map((entry) => <option key={entry.name}>{entry.name}</option>)}</select></div><button className="primary" type="submit">ACCEDI <span>→</span></button></form>{connectionError && <div className="connection-error">{connectionError}</div>}<div className="access-note"><span>●</span><div><b>Supabase Realtime</b><small>Dati condivisi tra tutti i dispositivi</small></div></div></section><aside className="login-visual" aria-hidden="true"><div className="speed-lines" /><div className="car-silhouette"><div className="roof" /><div className="body" /><div className="wheel w1" /><div className="wheel w2" /></div><div className="lot-number">LOT<br /><strong>001</strong></div></aside></main>;
 
   const isAdmin = user.role === "admin";
-  return <main className={`dashboard ${focused && !isAdmin ? "lobby-active" : ""} ${garageOpen ? "garage-active" : ""}`}>
+  return <main className={`dashboard ${focused && !isAdmin ? "lobby-active" : ""} ${garageOpen || marketOpen ? "garage-active" : ""}`}>
     <header><div className="brand"><Mark /><span>AUCTION<br />SIMULATOR</span></div><div className="profile"><div className="avatar">{user.name.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><div><b>{user.name}</b><small>{isAdmin ? "Amministratore" : "Partecipante"}</small></div><button onClick={logout} aria-label="Esci">↗</button></div></header>
     {connectionError && <div className="connection-error dashboard-error">{connectionError}</div>}
-    {!isAdmin && garageOpen && <section className="garage-page"><div className="garage-page-head"><div><div className="eyebrow"><i /> COLLEZIONE PERSONALE</div><h1>Il mio garage.</h1><p>Le automobili che ti sei aggiudicato, tutte in un unico posto.</p></div><div className="garage-balance"><small>SALDO ATTUALE</small><strong>{euros.format(balance)}</strong><button onClick={() => setGarageOpen(false)}>← TORNA ALLE ASTE</button></div></div>{garage.length === 0 ? <div className="garage-empty"><b>Il garage è vuoto.</b><span>Vinci un lotto per aggiungere la tua prima automobile.</span></div> : <div className="garage-grid">{garage.map((car) => <article className="garage-card" key={car.id}><div className="garage-photo">{car.imageUrl ? <img src={car.imageUrl} alt={car.vehicle} /> : <div><span>{car.vehicle.charAt(0)}</span><small>NESSUNA FOTO</small></div>}<label>CARICA FOTO<input type="file" accept="image/*" onChange={(event) => void uploadCarImage(car, event.target.files?.[0])} /></label></div><div className="garage-card-body"><small>AUTOMOBILE</small><h2>{car.vehicle}</h2><p>{car.auctionName}</p><div><span>PAGATA</span><strong>{euros.format(car.purchasePrice)}</strong></div><button onClick={() => setSellCarId(car.id)}>VENDI AUTOMOBILE →</button></div></article>)}</div>}</section>}
-    {!isAdmin && <section className="participant-wallet"><div className="wallet-balance"><small>SALDO DISPONIBILE</small><strong>{euros.format(balance)}</strong><span>Budget utilizzabile nelle aste</span></div><div className="garage-preview"><div><small>IL MIO GARAGE</small><button className="garage-open" onClick={() => setGarageOpen(true)}>{garage.length} AUTO · APRI →</button></div>{garage.length === 0 ? <p>Le auto che ti aggiudicherai compariranno qui.</p> : <div className="garage-cars">{garage.slice(0, 3).map((car) => <article key={car.id}><span>{car.vehicle.charAt(0)}</span><div><b>{car.vehicle}</b><small>{car.auctionName} · {euros.format(car.purchasePrice)}</small></div></article>)}</div>}</div></section>}
+    {!isAdmin && garageOpen && <section className="garage-page"><div className="garage-page-head"><div><div className="eyebrow"><i /> COLLEZIONE PERSONALE</div><h1>Il mio garage.</h1><p>Le automobili che ti sei aggiudicato, tutte in un unico posto.</p></div><div className="garage-balance"><small>SALDO ATTUALE</small><strong>{euros.format(balance)}</strong><button onClick={() => setGarageOpen(false)}>← TORNA ALLE ASTE</button></div></div>{garage.length === 0 ? <div className="garage-empty"><b>Il garage è vuoto.</b><span>Vinci un lotto per aggiungere la tua prima automobile.</span></div> : <div className="garage-grid">{garage.map((car) => <article className="garage-card" key={car.id}><div className="garage-photo">{car.imageUrl ? <img src={car.imageUrl} alt={car.vehicle} /> : <div><span>{car.vehicle.charAt(0)}</span><small>NESSUNA FOTO</small></div>}<label>CARICA FOTO<input type="file" accept="image/*" onChange={(event) => void uploadCarImage(car, event.target.files?.[0])} /></label></div><div className="garage-card-body"><small>AUTOMOBILE</small><h2>{car.vehicle}</h2><p>{car.auctionName}</p><div><span>PAGATA</span><strong>{euros.format(car.purchasePrice)}</strong></div>{listedCarIds.has(car.id) ? <button disabled>GIÀ SUL MERCATO</button> : <button onClick={() => setSellCarId(car.id)}>METTI IN VENDITA →</button>}</div></article>)}</div>}</section>}
+    {!isAdmin && marketOpen && <section className="garage-page market-page"><div className="garage-page-head"><div><div className="eyebrow"><i /> SCAMBI TRA PARTECIPANTI</div><h1>Mercato auto.</h1><p>Compra le auto degli altri utenti o gestisci i tuoi annunci.</p></div><div className="garage-balance"><small>SALDO DISPONIBILE</small><strong>{euros.format(balance)}</strong><div><button onClick={() => { setMarketOpen(false); setGarageOpen(true); }}>IL MIO GARAGE →</button><button onClick={() => setMarketOpen(false)}>← TORNA ALLE ASTE</button></div></div></div>{listings.length === 0 ? <div className="garage-empty"><b>Nessuna auto in vendita.</b><span>Puoi pubblicare il primo annuncio dal tuo garage.</span></div> : <div className="garage-grid">{listings.map((listing) => { const own = listing.sellerName === user.name; return <article className="garage-card market-card" key={listing.id}><div className="garage-photo">{listing.imageUrl ? <img src={listing.imageUrl} alt={listing.vehicle} /> : <div><span>{listing.vehicle.charAt(0)}</span><small>NESSUNA FOTO</small></div>}<span className="listing-date">IN VENDITA · {listing.createdAt}</span></div><div className="garage-card-body"><small>VENDITORE · {listing.sellerName}</small><h2>{listing.vehicle}</h2><div><span>PREZZO</span><strong>{euros.format(listing.price)}</strong></div>{own ? <button className="cancel-sale" disabled={marketPending === listing.id} onClick={() => void cancelListing(listing)}>{marketPending === listing.id ? "ATTENDI…" : "RITIRA ANNUNCIO"}</button> : listing.price > balance ? <button className="insufficient-bid" disabled>SALDO INSUFFICIENTE</button> : <button disabled={marketPending === listing.id} onClick={() => void buyCar(listing)}>{marketPending === listing.id ? "ACQUISTO…" : "ACQUISTA ORA →"}</button>}</div></article>; })}</div>}</section>}
+    {!isAdmin && <section className="participant-wallet"><div className="wallet-balance"><small>SALDO DISPONIBILE</small><strong>{euros.format(balance)}</strong><span>Budget utilizzabile in aste e mercato</span><button className="market-open" onClick={() => setMarketOpen(true)}>MERCATO · {listings.length} AUTO →</button></div><div className="garage-preview"><div><small>IL MIO GARAGE</small><button className="garage-open" onClick={() => setGarageOpen(true)}>{garage.length} AUTO · APRI →</button></div>{garage.length === 0 ? <p>Le auto che ti aggiudicherai o acquisterai compariranno qui.</p> : <div className="garage-cars">{garage.slice(0, 3).map((car) => <article key={car.id}><span>{car.vehicle.charAt(0)}</span><div><b>{car.vehicle}</b><small>{car.auctionName} · {euros.format(car.purchasePrice)}</small></div></article>)}</div>}</div></section>}
     <section className="hero-row"><div><div className="eyebrow"><i /> {isAdmin ? "REGIA D'ASTA" : "SALA D'ASTA"}</div><h1>{isAdmin ? "Avvia l'asta." : <>Alza la<br /><em>paletta.</em></>}</h1><p>{isAdmin ? "Inserisci una vettura alla volta, imposta la base e osserva la competizione in tempo reale." : "Iscriviti una volta e partecipa a tutti i lotti automobilistici dell'asta."}</p></div><div className="stats"><div><strong>{auctions.filter((auction) => auction.status === "live").length}</strong><span>ASTE<br />LIVE</span></div><div><strong>{auctions.reduce((sum, auction) => sum + auction.bids.length + auction.results.reduce((lotSum, result) => lotSum + result.bidCount, 0), 0)}</strong><span>OFFERTE<br />TOTALI</span></div></div></section>
-    {focused && <section className={`live-room ${focused.status}`}><div className="live-main"><div className="live-heading"><span className="live-badge">{focused.status === "live" ? "● LIVE" : isBetweenLots(focused) ? "LOTTO CONCLUSO" : focused.status === "closed" ? "ASTA CHIUSA" : "IN ATTESA"}</span><button onClick={() => setFocusedId(null)} aria-label="Torna alle aste">←</button></div><div className={`lobby-banner lobby-${focused.status}`}><span>LOBBY · {focused.participants.length} PARTECIPANTI</span><b>{lobbyTitle(focused)}</b><small>{lobbyCopy(focused)}</small></div><p>LOTTO {String(focused.lotNumber).padStart(2, "0")} · {focused.name}</p><h2>{focused.vehicle || "Prima vettura da inserire"}</h2>{(focused.status !== "waiting" || isBetweenLots(focused)) && <><div className="current-price"><small>{focused.status === "live" ? "OFFERTA ATTUALE" : "PREZZO DI AGGIUDICAZIONE"}</small><strong>{euros.format(focused.currentPrice)}</strong></div>{focused.status === "live" ? <div className="countdown"><span>CHIUSURA TRA</span><b>{Math.max(0, Math.ceil((focused.endsAt - now) / 1000))}</b><i style={{ width: `${Math.max(0, Math.min(100, (focused.endsAt - now) / 100))}%` }} /></div> : <div className="winner"><span>AGGIUDICATA A</span><strong>{focused.winner}</strong><small>{focused.bids.length} offerte ricevute</small></div>}</>}{isAdmin && isBetweenLots(focused) && <div className="next-lot-actions"><button onClick={() => setStartAuctionId(focused.id)}>PROSSIMA AUTO →</button><button onClick={() => void finishAuction(focused)}>TERMINA ASTA</button></div>}</div><aside className="bid-feed"><div className="feed-title"><b>Registro offerte · lotto {focused.lotNumber}</b><span>{focused.bids.length}/{focused.targetBids || "—"}</span></div><div className="feed-list">{focused.bids.length === 0 ? <p>In attesa della prima offerta…</p> : focused.bids.slice(0, 12).map((bid, index) => <div className={index === 0 ? "top-bid" : ""} key={bid.id}><span className="bid-avatar">{bid.bot ? "BOT" : bid.bidder.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span><span><b>{bid.bidder}</b><small>{bid.bot ? "Offerente automatico" : "Partecipante"}</small></span><strong>{euros.format(bid.amount)}</strong></div>)}</div>{!isAdmin && focused.status === "live" && <div className="bid-action">{focused.participants.includes(user.name) ? isUserLeading(focused) ? <button className="leading-bid" disabled>SEI IL MIGLIOR OFFERENTE <span>✓</span></button> : focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) > balance ? <button className="insufficient-bid" disabled>SALDO INSUFFICIENTE <span>!</span></button> : <button onClick={() => placeBid(focused)}>OFFRI {euros.format(focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice))} <span>↑</span></button> : <button onClick={() => toggleParticipation(focused.id)}>ISCRIVITI PER OFFRIRE</button>}<small>{isUserLeading(focused) ? "Potrai rilanciare quando qualcuno supererà la tua offerta" : focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) > balance ? `Ti mancano ${euros.format(focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) - balance)} per rilanciare` : "Ogni offerta riporta il timer a 10 secondi"}</small></div>}{focused.results.length > 0 && <div className="lot-history"><b>Auto aggiudicate</b>{focused.results.slice().reverse().map((result) => <div key={result.lotNumber}><span>{result.lotNumber}. {result.vehicle}</span><strong>{result.winner} · {euros.format(result.finalPrice)}</strong></div>)}</div>}</aside></section>}
+    {focused && <section className={`live-room ${focused.status}`}><div className="live-main"><div className="live-heading"><span className="live-badge">{focused.status === "live" ? "● LIVE" : isBetweenLots(focused) ? "LOTTO CONCLUSO" : focused.status === "closed" ? "ASTA CHIUSA" : "IN ATTESA"}</span><button onClick={() => setFocusedId(null)} aria-label="Torna alle aste">←</button></div><div className={`lobby-banner lobby-${focused.status}`}><span>LOBBY · {focused.participants.length} PARTECIPANTI</span><b>{lobbyTitle(focused)}</b><small>{lobbyCopy(focused)}</small></div><p>LOTTO {String(focused.lotNumber).padStart(2, "0")} · {focused.name}</p><h2>{focused.vehicle || "Prima vettura da inserire"}</h2>{(focused.status !== "waiting" || isBetweenLots(focused)) && <><div className="current-price"><small>{focused.status === "live" ? "OFFERTA ATTUALE" : "PREZZO DI AGGIUDICAZIONE"}</small><strong>{euros.format(focused.currentPrice)}</strong></div>{focused.status === "live" ? <div className="countdown"><span>CHIUSURA TRA</span><b>{Math.max(0, Math.ceil((focused.endsAt - now) / 1000))}</b><i style={{ width: `${Math.max(0, Math.min(100, (focused.endsAt - now) / 100))}%` }} /></div> : <div className="winner"><span>AGGIUDICATA A</span><strong>{focused.winner}</strong><small>{focused.bids.length} offerte ricevute</small></div>}</>}{isAdmin && isBetweenLots(focused) && <div className="next-lot-actions"><button onClick={() => setStartAuctionId(focused.id)}>PROSSIMA AUTO →</button><button onClick={() => void finishAuction(focused)}>TERMINA ASTA</button></div>}</div><aside className="bid-feed"><div className="feed-title"><b>Registro offerte · lotto {focused.lotNumber}</b><span>{focused.bids.length}/{focused.targetBids || "—"}</span></div><div className="feed-list">{focused.bids.length === 0 ? <p>In attesa della prima offerta…</p> : focused.bids.slice(0, 12).map((bid, index) => <div className={index === 0 ? "top-bid" : ""} key={bid.id}><span className="bid-avatar">{bid.bot ? "BOT" : bid.bidder.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span><span><b>{bid.bidder}</b><small>{bid.bot ? "Offerente automatico" : "Partecipante"}</small></span><strong>{euros.format(bid.amount)}</strong></div>)}</div>{!isAdmin && focused.status === "live" && <div className="bid-action">{focused.participants.includes(user.name) ? bidPending ? <button className="leading-bid" disabled>OFFERTA IN CORSO…</button> : isUserLeading(focused) ? <button className="leading-bid" disabled>SEI IL MIGLIOR OFFERENTE <span>✓</span></button> : focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) > balance ? <button className="insufficient-bid" disabled>SALDO INSUFFICIENTE <span>!</span></button> : <button onClick={() => placeBid(focused)}>OFFRI {euros.format(focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice))} <span>↑</span></button> : <button onClick={() => toggleParticipation(focused.id)}>ISCRIVITI PER OFFRIRE</button>}<small>{bidPending ? "Sto registrando l’offerta nel database" : isUserLeading(focused) ? "Potrai rilanciare quando qualcuno supererà la tua offerta" : focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) > balance ? `Ti mancano ${euros.format(focused.currentPrice + incrementFor(focused.currentPrice, focused.startPrice) - balance)} per rilanciare` : "Ogni offerta riporta il timer a 10 secondi"}</small></div>}{focused.results.length > 0 && <div className="lot-history"><b>Auto aggiudicate</b>{focused.results.slice().reverse().map((result) => <div key={result.lotNumber}><span>{result.lotNumber}. {result.vehicle}</span><strong>{result.winner} · {euros.format(result.finalPrice)}</strong></div>)}</div>}</aside></section>}
     <section className="content-head"><div><span className="section-number">01</span><h2>Tutte le aste</h2></div>{isAdmin && <button className="primary compact" onClick={() => setShowCreate(true)}>+ NUOVA ASTA</button>}</section>
     <section className="auction-grid">{auctions.length === 0 && !connectionError ? <p className="empty-state">Nessuna asta presente. L&apos;admin può creare la prima.</p> : auctions.map((auction, index) => { const joined = auction.participants.includes(user.name); return <article className="auction-card simple-auction" key={auction.id} style={{ "--accent": auction.accent } as React.CSSProperties}><div className="card-top"><span>ASTA {String(index + 1).padStart(3, "0")}</span><span className={`status-${auction.status}`}>{auction.status === "live" ? "● LIVE" : isBetweenLots(auction) ? "LOTTO CONCLUSO" : auction.status === "closed" ? "CHIUSA" : "DA AVVIARE"}</span></div><div className="auction-monogram" aria-hidden="true"><span>{auction.name.charAt(0).toUpperCase()}</span><i>{String(index + 1).padStart(2, "0")}</i></div><div className="card-body"><small>NOME DELL&apos;ASTA</small><h3>{auction.name}</h3>{auction.vehicle && <p className="current-vehicle">Lotto {auction.lotNumber}: <b>{auction.vehicle}</b></p>}<div className="auction-meta"><span>{auction.status === "waiting" && !isBetweenLots(auction) ? `Creata il ${auction.createdAt}` : `Base ${euros.format(auction.startPrice)}`}</span><strong>{auction.results.length} auto aggiudicate</strong></div>{isBetweenLots(auction) && <div className="card-winner">Ultimo lotto: <b>{auction.winner}</b></div>}</div><div className="card-footer simple-footer"><div><small>STATO</small><b>{auction.status === "live" ? euros.format(auction.currentPrice) : isBetweenLots(auction) ? "Pronta per la prossima" : auction.status === "closed" ? `${auction.results.length} lotti conclusi` : `${auction.participants.length} iscritti`}</b></div>{isAdmin ? (auction.status === "waiting" && !isBetweenLots(auction) ? <button onClick={() => setStartAuctionId(auction.id)}>PRIMA AUTO →</button> : isBetweenLots(auction) ? <button onClick={() => setStartAuctionId(auction.id)}>PROSSIMA →</button> : <button onClick={() => setFocusedId(auction.id)}>SEGUI →</button>) : (auction.status === "waiting" && !isBetweenLots(auction) ? (joined ? <button className="joined" onClick={() => setFocusedId(auction.id)}>ENTRA NELLA LOBBY →</button> : <button onClick={() => toggleParticipation(auction.id)}>PARTECIPA →</button>) : <button onClick={() => setFocusedId(auction.id)}>{auction.status === "live" ? "ENTRA NELLA LOBBY →" : isBetweenLots(auction) ? "TORNA NELLA LOBBY →" : "RISULTATI →"}</button>)}</div></article>; })}</section>
-    {sellCarId && <div className="modal-backdrop" onMouseDown={() => setSellCarId(null)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setSellCarId(null)}>×</button><div className="eyebrow"><i /> VENDITA AUTOMOBILE</div><h2>Quanto vuoi ricavare?</h2><p>La cifra verrà accreditata sul tuo saldo e l’auto uscirà dal garage.</p><form onSubmit={sellCar}><label>Prezzo di vendita (€)<input name="salePrice" type="number" min="1" step="50" placeholder="es. 45.000" autoFocus required /></label><button className="primary" type="submit">CONFERMA VENDITA <span>→</span></button></form></section></div>}
+    {sellCarId && <div className="modal-backdrop" onMouseDown={() => setSellCarId(null)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setSellCarId(null)}>×</button><div className="eyebrow"><i /> NUOVO ANNUNCIO</div><h2>Scegli il prezzo.</h2><p>L’auto resterà nel tuo garage fino all’acquisto. Il ricavato verrà accreditato automaticamente.</p><form onSubmit={listCar}><label>Prezzo di vendita (€)<input name="salePrice" type="number" min="100" max="100000000" step="50" placeholder="es. 45.000" autoFocus required /></label><button className="primary" type="submit" disabled={marketPending === sellCarId}>{marketPending === sellCarId ? "PUBBLICAZIONE…" : "PUBBLICA SUL MERCATO"} <span>→</span></button></form></section></div>}
     {showCreate && <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setShowCreate(false)}>×</button><div className="eyebrow"><i /> NUOVA ASTA</div><h2>Crea un&apos;asta</h2><form onSubmit={addAuction}><label>Nome dell&apos;asta<input name="name" placeholder="es. Supercar d'estate" maxLength={60} autoFocus required /></label><button className="primary" type="submit">CREA ASTA <span>→</span></button></form></section></div>}
     {startAuctionId !== null && <div className="modal-backdrop" onMouseDown={() => setStartAuctionId(null)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setStartAuctionId(null)}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Inserisci l&apos;automobile</h2><p>Il prezzo base dovrebbe essere circa due terzi del valore stimato della vettura.</p><form onSubmit={startAuction}><label>Marca e modello<input name="vehicle" placeholder="es. Porsche 911 Carrera" maxLength={80} autoFocus required /></label><label>Prezzo iniziale (€)<input name="price" type="number" min="100" step="50" placeholder="es. 60.000" required /></label><button className="primary" type="submit">AVVIA LOTTO <span>●</span></button></form></section></div>}
   </main>;
