@@ -258,3 +258,22 @@ button{letter-spacing:-.01em}
   .lot-history{max-height:none}.lot-history>div{line-height:1.35}
 }
 @media(max-width:370px){.stats{grid-template-columns:1fr}.stats>div,.stats>div+div{min-height:94px}.current-price strong{font-size:45px}.feed-list>div>strong{font-size:11px}}
+
+/* Control alignment and state normalization */
+.primary,.card-footer button,.garage-card-body button,.garage-sale-actions button,.confirmation-actions button,.next-lot-actions button,.bid-action button,.garage-balance button,.market-open{display:flex;align-items:center;justify-content:center;line-height:1;text-align:center}
+.primary{justify-content:space-between}.primary>span{display:grid;place-items:center;flex:none;line-height:1}
+.compact.primary{justify-content:center}
+.card-footer button{margin:5px;min-height:54px}
+.close{display:grid;place-items:center;padding:0;line-height:1}
+select{appearance:none;-webkit-appearance:none;padding-right:48px}
+.select-wrap:after{top:50%;right:18px;transform:translateY(-50%);line-height:1}
+select:focus,input:focus{border-color:rgba(22,23,22,.22);box-shadow:none}
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid #a7d500;outline-offset:2px}
+input[type="number"]{-moz-appearance:textfield}
+input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.garage-card-body button:disabled,.button-muted:disabled,.bid-action button:disabled{opacity:1}
+@media(max-width:700px){
+  .primary,.button-primary,.button-secondary,.button-muted,.garage-card-body>button,.garage-sale-actions>button,.confirmation-actions>button,.bid-action>button{min-height:54px}
+  .select-wrap:after{right:17px}
+  .modal form{gap:14px}.modal label{gap:10px}.modal input{padding:16px 17px}
+}
