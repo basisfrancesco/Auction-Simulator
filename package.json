@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
+    "build:sites": "vite build",
     "start": "next start",
     "test": "pnpm run build",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
