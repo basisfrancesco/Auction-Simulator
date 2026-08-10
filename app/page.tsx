@@ -140,7 +140,11 @@ export default function Home() {
     setMarketPending(externalSaleCarId);
     const result = await supabase.rpc("sell_car_externally", { p_car_id: externalSaleCarId, p_seller_name: user.name, p_price: externalSalePrice });
     setMarketPending(null);
-    if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); return; }
+    if (result.error) {
+      const missingRpc = result.error.code === "PGRST202" || result.error.message.includes("schema cache");
+      setConnectionError(missingRpc ? "La funzione di vendita esterna non è ancora installata su Supabase. Applica la migrazione 20260810_repair_external_sale_rpc.sql." : result.error.message.replace("P0001: ", ""));
+      return;
+    }
     setExternalSaleCarId(null); setExternalSalePrice(null); setConnectionError(""); await loadParticipantProfile(user.name);
   };
 
