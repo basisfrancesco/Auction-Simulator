@@ -326,17 +326,10 @@ export default function Home() {
     try {
       const { data } = await supabase.auth.getUser();
       if (!data.user) { setConnectionError("La sessione è scaduta: esci e accedi nuovamente."); return; }
-      const currentEnrollment = await supabase.from("auction_participants").select("auction_id").eq("auction_id", auction.id).eq("user_id", data.user.id).eq("user_name", user.name).maybeSingle();
-      if (currentEnrollment.error) { setConnectionError(`Iscrizione asta: ${currentEnrollment.error.message}`); return; }
-      if (!currentEnrollment.data) {
-        const reassigned = await supabase.from("auction_participants").update({ user_id: data.user.id }).eq("auction_id", auction.id).eq("user_name", user.name).select("auction_id");
-        if (reassigned.error) { setConnectionError(`Iscrizione asta: ${reassigned.error.message}`); return; }
-        if (!reassigned.data?.length) {
-          const enrolled = await supabase.from("auction_participants").insert({ auction_id: auction.id, user_id: data.user.id, user_name: user.name });
-          if (enrolled.error) { setConnectionError(`Iscrizione asta: ${enrolled.error.message}`); return; }
-        }
+      let result = await supabase.rpc("place_participant_bid_v2", { p_auction_id: auction.id, p_bidder_name: user.name });
+      if (result.error?.code === "PGRST202" || result.error?.message.includes("schema cache")) {
+        result = await supabase.rpc("place_participant_bid", { p_auction_id: auction.id, p_bidder_id: data.user.id, p_bidder_name: user.name });
       }
-      const result = await supabase.rpc("place_participant_bid", { p_auction_id: auction.id, p_bidder_id: data.user.id, p_bidder_name: user.name });
       if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); await loadAuctions(); return; }
       setOptimisticLeader(`${auction.id}:${auction.lotNumber}`); setConnectionError("");
       await loadAuctions();
