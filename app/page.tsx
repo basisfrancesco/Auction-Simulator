@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
+import { estimateVehicleValue } from "./vehicle-values";
 
 type User = { name: string; role: "participant" | "admin" };
 type Bid = { id: string; bidder: string; amount: number; at: number; bot: boolean };
@@ -65,6 +66,7 @@ export default function Home() {
   const [bidPending, setBidPending] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [startAuctionId, setStartAuctionId] = useState<string | null>(null);
+  const [vehicleDraft, setVehicleDraft] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const auctionsRef = useRef<Auction[]>([]);
@@ -302,7 +304,8 @@ export default function Home() {
   const startAuction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); if (startAuctionId === null) return;
     const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim();
-    const estimatedValue = price * 1.5;
+    const estimatedValue = Number(form.get("marketValue")) || estimateVehicleValue(vehicle);
+    if (!estimatedValue) { setConnectionError("Modello non riconosciuto: inserisci il valore di mercato stimato prima di avviare il lotto."); return; }
     const marketMood = .62 + Math.random() * .66;
     const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
       name, budget: Math.max(price + incrementFor(price, price), Math.round((estimatedValue * marketMood * (.72 + Math.random() * .35)) / 100) * 100),
@@ -313,7 +316,7 @@ export default function Home() {
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
     const startedLot = Array.isArray(startResult.data) ? startResult.data[0] : null;
     setAuctions((current) => current.map((auction) => auction.id === startAuctionId ? { ...auction, status: "live", vehicle, startPrice: price, currentPrice: price, bids: [], bots, targetBids, winner: "", lotNumber: Number(startedLot?.lot_number ?? auction.results.length + 1), endsAt: new Date(startedLot?.ends_at ?? Date.now() + 10000).getTime() } : auction));
-    setFocusedId(startAuctionId); setStartAuctionId(null); setConnectionError("");
+    setFocusedId(startAuctionId); setStartAuctionId(null); setVehicleDraft(""); setConnectionError("");
     await loadAuctions();
   };
   const finishAuction = async (auction: Auction) => {
@@ -358,6 +361,6 @@ export default function Home() {
     {externalSaleCarId && <div className="modal-backdrop" onMouseDown={() => { setExternalSaleCarId(null); setExternalSalePrice(null); }}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => { setExternalSaleCarId(null); setExternalSalePrice(null); }}>×</button><div className="eyebrow"><i /> VENDITA ESTERNA</div>{externalSalePrice === null ? <><h2>Inserisci il prezzo.</h2><p>Indica la cifra concordata per <b>{garage.find((car) => car.id === externalSaleCarId)?.vehicle}</b>. Potrai controllarla prima di vendere.</p><form onSubmit={prepareExternalSale}><label>Prezzo concordato (€)<input name="externalSalePrice" type="number" min="100" max="100000000" step="50" placeholder="es. 45.000" autoFocus required /></label><button className="primary" type="submit">CONTINUA <span>→</span></button></form></> : <><h2>Confermi la vendita?</h2><p>Controlla attentamente i dati: dopo la conferma l’auto uscirà dal garage.</p><div className="sale-confirm-summary"><span>AUTOMOBILE</span><strong>{garage.find((car) => car.id === externalSaleCarId)?.vehicle}</strong><span>PREZZO DI VENDITA</span><strong>{euros.format(externalSalePrice)}</strong><span>SALDO ATTUALE</span><strong>{euros.format(balance)}</strong><span>SALDO DOPO LA VENDITA</span><strong className="result-balance">{euros.format(balance + externalSalePrice)}</strong></div><div className="confirmation-actions"><button type="button" onClick={() => setExternalSalePrice(null)}>INDIETRO</button><button className="primary" type="button" disabled={marketPending === externalSaleCarId} onClick={() => void sellCarExternally()}>{marketPending === externalSaleCarId ? "VENDITA…" : "CONFERMA VENDITA"}</button></div></>}</section></div>}
     {purchaseListing && <div className="modal-backdrop" onMouseDown={() => setPurchaseListing(null)}><section className="modal compact-modal purchase-confirm" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setPurchaseListing(null)}>×</button><div className="eyebrow"><i /> CONFERMA ACQUISTO</div><h2>{purchaseListing.vehicle}</h2><p>Acquisti l’auto da <b>{purchaseListing.sellerName}</b>. Il passaggio di proprietà e il pagamento saranno immediati.</p><div className="purchase-summary"><span>PREZZO</span><strong>{euros.format(purchaseListing.price)}</strong><span>SALDO DOPO L’ACQUISTO</span><strong>{euros.format(balance - purchaseListing.price)}</strong></div><div className="confirmation-actions"><button onClick={() => setPurchaseListing(null)}>ANNULLA</button><button className="primary" disabled={marketPending === purchaseListing.id} onClick={() => void buyCar(purchaseListing)}>{marketPending === purchaseListing.id ? "ACQUISTO…" : "CONFERMA ACQUISTO"}</button></div></section></div>}
     {showCreate && <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setShowCreate(false)}>×</button><div className="eyebrow"><i /> NUOVA ASTA</div><h2>Crea un&apos;asta</h2><form onSubmit={addAuction}><label>Nome dell&apos;asta<input name="name" placeholder="es. Supercar d'estate" maxLength={60} autoFocus required /></label><button className="primary" type="submit">CREA ASTA <span>→</span></button></form></section></div>}
-    {startAuctionId !== null && <div className="modal-backdrop" onMouseDown={() => setStartAuctionId(null)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setStartAuctionId(null)}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Inserisci l&apos;automobile</h2><p>Il prezzo base dovrebbe essere circa due terzi del valore stimato della vettura.</p><form onSubmit={startAuction}><label>Marca e modello<input name="vehicle" placeholder="es. Porsche 911 Carrera" maxLength={80} autoFocus required /></label><label>Prezzo iniziale (€)<input name="price" type="number" min="100" step="50" placeholder="es. 60.000" required /></label><button className="primary" type="submit">AVVIA LOTTO <span>●</span></button></form></section></div>}
+    {startAuctionId !== null && <div className="modal-backdrop" onMouseDown={() => setStartAuctionId(null)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setStartAuctionId(null)}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Inserisci l&apos;automobile</h2><p>I bot stimano il proprio limite dal modello e dalla versione, indipendentemente dalla base d’asta.</p><form onSubmit={startAuction}><label>Marca, modello e versione<input name="vehicle" value={vehicleDraft} onChange={(event) => setVehicleDraft(event.target.value)} placeholder="es. Ferrari 812 Competizione" maxLength={80} autoFocus required /></label>{vehicleDraft.trim() && <div className={`vehicle-estimate ${estimateVehicleValue(vehicleDraft) ? "recognized" : "unknown"}`}><span>{estimateVehicleValue(vehicleDraft) ? "VALORE RICONOSCIUTO" : "MODELLO NON PRESENTE NEL CATALOGO"}</span><strong>{estimateVehicleValue(vehicleDraft) ? euros.format(estimateVehicleValue(vehicleDraft)!) : "Inserisci una stima manuale"}</strong></div>}<label>Valore di mercato stimato (€) <small>facoltativo se riconosciuto</small><input name="marketValue" type="number" min="100" step="500" placeholder="Sostituisci o integra la stima automatica" /></label><label>Prezzo iniziale (€)<input name="price" type="number" min="100" step="50" placeholder="es. 60.000" required /></label><button className="primary" type="submit">AVVIA LOTTO <span>●</span></button></form></section></div>}
   </main>;
 }

@@ -1,10 +1,12 @@
 -- Puntata partecipante indipendente dall'ID della precedente sessione anonima.
 -- L'app identifica i profili demo per nome; auth.uid() garantisce comunque
 -- che la richiesta provenga da una sessione Supabase autenticata.
+drop function if exists public.place_participant_bid_v2(uuid, text);
+
 create or replace function public.place_participant_bid_v2(
   p_auction_id uuid,
   p_bidder_name text
-) returns table(amount numeric, ends_at timestamptz, lot_number integer)
+) returns table(bid_amount numeric, bid_ends_at timestamptz, bid_lot_number integer)
 language plpgsql
 security definer
 set search_path = public
@@ -33,23 +35,23 @@ begin
   -- L'iscrizione segue il profilo scelto, anche se la sessione anonima è stata
   -- rinnovata o il partecipante è entrato da un altro dispositivo.
   if not exists (
-    select 1 from public.auction_participants
-    where auction_id = p_auction_id and user_name = p_bidder_name
+    select 1 from public.auction_participants as ap
+    where ap.auction_id = p_auction_id and ap.user_name = p_bidder_name
   ) then
     raise exception 'Non sei iscritto a questa asta';
   end if;
 
   current_lot := coalesce((a.bot_config->>'lotNumber')::integer, 1);
-  select bidder_name into last_bidder
+  select b.bidder_name into last_bidder
   from public.bids as b
   where b.auction_id = p_auction_id and b.lot_number = current_lot
   order by b.amount desc, b.created_at desc
   limit 1;
   if last_bidder = p_bidder_name then raise exception 'Sei già il miglior offerente'; end if;
 
-  select balance into account_balance
-  from public.participant_accounts
-  where name = p_bidder_name
+  select pa.balance into account_balance
+  from public.participant_accounts as pa
+  where pa.name = p_bidder_name
   for update;
   if account_balance is null then raise exception 'Saldo non disponibile'; end if;
 
