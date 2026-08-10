@@ -1,7 +1,7 @@
 // Valori indicativi usati esclusivamente per simulare il limite dei bot.
 // Le voci più specifiche devono precedere i modelli generici.
 const VEHICLE_MARKET_VALUES: Array<[RegExp, number]> = [
-  [/ferrari.*812.*competizione/i, 1_350_000], [/ferrari.*812/i, 360_000],
+  [/ferrari.*812.*(?:competizione|competezione|competition)/i, 1_350_000], [/ferrari.*812/i, 360_000],
   [/ferrari.*sf90/i, 470_000], [/ferrari.*f8/i, 330_000], [/ferrari.*488/i, 245_000], [/ferrari.*roma/i, 215_000],
   [/porsche.*911.*gt3\s*rs/i, 320_000], [/porsche.*911.*gt3/i, 225_000], [/porsche.*911.*turbo\s*s/i, 245_000], [/porsche.*911/i, 145_000], [/porsche.*718/i, 82_000],
   [/lamborghini.*revuelto/i, 560_000], [/lamborghini.*aventador/i, 430_000], [/lamborghini.*huracan/i, 260_000], [/lamborghini.*urus/i, 245_000],
@@ -15,12 +15,35 @@ const VEHICLE_MARKET_VALUES: Array<[RegExp, number]> = [
   [/ford.*mustang.*shelby/i, 125_000], [/ford.*mustang/i, 68_000], [/chevrolet.*corvette.*z06/i, 175_000], [/chevrolet.*corvette/i, 105_000],
 ];
 
+const BRAND_BASE_VALUES: Array<[RegExp, number]> = [
+  [/ferrari|lamborghini|mclaren/, 310_000], [/rolls royce|bentley/, 240_000],
+  [/aston martin|maserati/, 175_000], [/porsche/, 125_000], [/mercedes|bmw|audi|lexus/, 78_000],
+  [/alfa romeo|jaguar|land rover|lotus/, 65_000], [/tesla|volvo|polestar/, 55_000],
+  [/ford|chevrolet|dodge|cadillac|jeep/, 52_000], [/toyota|nissan|honda|subaru|mazda/, 42_000],
+  [/volkswagen|mini|cupra|abarth/, 39_000], [/fiat|renault|peugeot|citroen|opel|skoda|seat|hyundai|kia/, 31_000],
+];
+
 const normalizeVehicleName = (vehicle: string) => vehicle
   .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   .replace(/\b(?:19|20)\d{2}\b/g, " ")
   .replace(/[^a-z0-9]+/gi, " ").trim();
 
-export const estimateVehicleValue = (vehicle: string): number | null => {
+export const hasExactVehicleValue = (vehicle: string) => {
   const normalized = normalizeVehicleName(vehicle);
-  return VEHICLE_MARKET_VALUES.find(([pattern]) => pattern.test(normalized))?.[1] ?? null;
+  return VEHICLE_MARKET_VALUES.some(([pattern]) => pattern.test(normalized));
+};
+
+export const estimateVehicleValue = (vehicle: string): number => {
+  const normalized = normalizeVehicleName(vehicle);
+  if (!normalized) return 0;
+  const catalogValue = VEHICLE_MARKET_VALUES.find(([pattern]) => pattern.test(normalized))?.[1];
+  if (catalogValue) return catalogValue;
+
+  const brandBase = BRAND_BASE_VALUES.find(([pattern]) => pattern.test(normalized))?.[1] ?? 48_000;
+  const versionMultiplier = /svj|gto|speciale|competizione|csl|gt3|gt2|z06/.test(normalized) ? 1.45
+    : /quadrifoglio|competition|performance|turbo|shelby|type r|amg|\brs\b/.test(normalized) ? 1.22
+      : /sport|carrera|coupe|spider|cabrio/.test(normalized) ? 1.1 : 1;
+  const nameVariation = normalized.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % 9;
+  const value = brandBase * versionMultiplier * (.96 + nameVariation * .01);
+  return Math.max(15_000, Math.round(value / 500) * 500);
 };
