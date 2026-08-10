@@ -3,6 +3,7 @@
 
 begin;
 
+delete from public.auction_wheel_spins;
 delete from public.car_listings;
 delete from public.garage_cars;
 delete from public.bids;
