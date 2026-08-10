@@ -70,7 +70,8 @@ export default function Home() {
   const auctionsRef = useRef<Auction[]>([]);
   const engineBusy = useRef(false);
   const bidBusy = useRef(false);
-  const loadSequence = useRef(0);
+  const auctionLoadPromise = useRef<Promise<void> | null>(null);
+  const auctionReloadQueued = useRef(false);
   const serverOffset = useRef(0);
   const realtimeRefresh = useRef<number | null>(null);
 
@@ -155,35 +156,45 @@ export default function Home() {
   };
 
   const loadAuctions = async () => {
-    const sequence = ++loadSequence.current;
-    const requestedAt = Date.now();
-    const [auctionResult, participantResult, bidResult, serverTimeResult] = await Promise.all([
-      supabase.from("auctions").select("*").order("created_at", { ascending: false }),
-      supabase.from("auction_participants").select("auction_id,user_name"),
-      supabase.from("bids").select("*").order("created_at", { ascending: false }),
-      supabase.rpc("auction_server_now_ms"),
-    ]);
-    if (sequence !== loadSequence.current) return;
-    const error = auctionResult.error || participantResult.error || bidResult.error || serverTimeResult.error;
-    if (error) { setConnectionError(`Supabase: ${error.message}`); return; }
-    const receivedAt = Date.now();
-    serverOffset.current = Number(serverTimeResult.data) - Math.round((requestedAt + receivedAt) / 2);
-    const participants = participantResult.data || []; const bids = bidResult.data || [];
-    const colors = ["#d9ff43", "#ff6b35", "#70d7ff"];
-    const mapped: Auction[] = (auctionResult.data || []).map((row, index) => {
-      const config = row.bot_config && !Array.isArray(row.bot_config) ? row.bot_config as { bots?: Bot[]; nextBotAt?: number; vehicle?: string; lotNumber?: number; results?: LotResult[]; lotStartedAt?: number } : { bots: row.bot_config as Bot[] };
-      const lotNumber = config.lotNumber || 1;
-      return {
-        id: String(row.id), name: row.name, createdAt: new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long", year: "numeric" }).format(new Date(row.created_at)),
-        participants: participants.filter((item) => item.auction_id === row.id).map((item) => item.user_name), accent: colors[index % colors.length],
-        status: row.status, startPrice: Number(row.start_price), currentPrice: Number(row.current_price),
-        bids: bids.filter((bid) => bid.auction_id === row.id && (!config.lotStartedAt || new Date(bid.created_at).getTime() >= config.lotStartedAt)).map((bid) => ({ id: String(bid.id), bidder: bid.bidder_name, amount: Number(bid.amount), at: new Date(bid.created_at).getTime(), bot: bid.is_bot })),
-        endsAt: row.ends_at ? new Date(row.ends_at).getTime() : 0, nextBotAt: config.nextBotAt || 0,
-        targetBids: row.target_bids || 50, bots: config.bots || [], winner: row.winner || "",
-        lotNumber, vehicle: config.vehicle || "", results: config.results || [], lotStartedAt: config.lotStartedAt || 0,
-      };
-    });
-    setAuctions(mapped); setConnectionError("");
+    auctionReloadQueued.current = true;
+    if (auctionLoadPromise.current) return auctionLoadPromise.current;
+
+    const task = (async () => {
+      while (auctionReloadQueued.current) {
+        auctionReloadQueued.current = false;
+        const requestedAt = Date.now();
+        const [auctionResult, participantResult, bidResult, serverTimeResult] = await Promise.all([
+          supabase.from("auctions").select("*").order("created_at", { ascending: false }),
+          supabase.from("auction_participants").select("auction_id,user_name"),
+          supabase.from("bids").select("*").order("created_at", { ascending: false }),
+          supabase.rpc("auction_server_now_ms"),
+        ]);
+        const error = auctionResult.error || participantResult.error || bidResult.error || serverTimeResult.error;
+        if (error) { setConnectionError(`Supabase: ${error.message}`); continue; }
+        const receivedAt = Date.now();
+        serverOffset.current = Number(serverTimeResult.data) - Math.round((requestedAt + receivedAt) / 2);
+        const participants = participantResult.data || []; const bids = bidResult.data || [];
+        const colors = ["#d9ff43", "#ff6b35", "#70d7ff"];
+        const mapped: Auction[] = (auctionResult.data || []).map((row, index) => {
+          const config = row.bot_config && !Array.isArray(row.bot_config) ? row.bot_config as { bots?: Bot[]; nextBotAt?: number; vehicle?: string; lotNumber?: number; results?: LotResult[]; lotStartedAt?: number } : { bots: row.bot_config as Bot[] };
+          const lotNumber = config.lotNumber || 1;
+          const lotBids = bids.filter((bid) => bid.auction_id === row.id && (bid.lot_number != null ? Number(bid.lot_number) === lotNumber : !config.lotStartedAt || new Date(bid.created_at).getTime() >= config.lotStartedAt));
+          return {
+            id: String(row.id), name: row.name, createdAt: new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long", year: "numeric" }).format(new Date(row.created_at)),
+            participants: participants.filter((item) => item.auction_id === row.id).map((item) => item.user_name), accent: colors[index % colors.length],
+            status: row.status, startPrice: Number(row.start_price), currentPrice: Number(row.current_price),
+            bids: lotBids.map((bid) => ({ id: String(bid.id), bidder: bid.bidder_name, amount: Number(bid.amount), at: new Date(bid.created_at).getTime(), bot: bid.is_bot })),
+            endsAt: row.ends_at ? new Date(row.ends_at).getTime() : 0, nextBotAt: config.nextBotAt || 0,
+            targetBids: row.target_bids || 50, bots: config.bots || [], winner: row.winner || "",
+            lotNumber, vehicle: config.vehicle || "", results: config.results || [], lotStartedAt: config.lotStartedAt || 0,
+          };
+        });
+        setAuctions(mapped);
+        setConnectionError((current) => current.startsWith("Supabase:") ? "" : current);
+      }
+    })();
+    auctionLoadPromise.current = task;
+    try { await task; } finally { if (auctionLoadPromise.current === task) auctionLoadPromise.current = null; }
   };
   const scheduleAuctionRefresh = () => {
     if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current);
@@ -204,8 +215,18 @@ export default function Home() {
       .on("postgres_changes", { event: "*", schema: "public", table: "auction_participants" }, scheduleAuctionRefresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "bids" }, scheduleAuctionRefresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "car_listings" }, () => void loadMarketplace())
-      .subscribe();
-    return () => { if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current); void supabase.removeChannel(channel); };
+      .subscribe((status) => { if (status === "SUBSCRIBED") scheduleAuctionRefresh(); });
+    const fallbackRefresh = window.setInterval(() => void loadAuctions(), 1500);
+    const refreshWhenVisible = () => { if (document.visibilityState === "visible") void loadAuctions(); };
+    window.addEventListener("online", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      if (realtimeRefresh.current) window.clearTimeout(realtimeRefresh.current);
+      window.clearInterval(fallbackRefresh);
+      window.removeEventListener("online", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      void supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {
@@ -257,9 +278,12 @@ export default function Home() {
             const nextBots = evolvedBots.map((entry) => entry.name === bot.name ? { ...entry, heat: Math.min(1, (entry.heat ?? .25) + .18 + Math.random() * .18) } : entry);
             const advanceAuction = await supabase.rpc("place_bot_bid", { p_auction_id: auction.id, p_expected_price: auction.currentPrice, p_bidder_name: bot.name, p_amount: amount, p_bots: nextBots, p_next_bot_at: Math.round(nextBotAt) });
             if (advanceAuction.error) setConnectionError(`Offerta bot: ${advanceAuction.error.message}`);
+            else if (advanceAuction.data) await loadAuctions();
           } else {
             const hesitation = tick + 600 + Math.random() * 1800;
-            await supabase.rpc("schedule_bot_attempt", { p_auction_id: auction.id, p_expected_price: auction.currentPrice, p_bots: evolvedBots, p_next_bot_at: Math.round(hesitation) });
+            const scheduled = await supabase.rpc("schedule_bot_attempt", { p_auction_id: auction.id, p_expected_price: auction.currentPrice, p_bots: evolvedBots, p_next_bot_at: Math.round(hesitation) });
+            if (scheduled.error) setConnectionError(`Programmazione bot: ${scheduled.error.message}`);
+            else if (scheduled.data) await loadAuctions();
           }
         }
       } finally { engineBusy.current = false; }
@@ -287,7 +311,10 @@ export default function Home() {
     }));
     const targetBids = Math.max(12, Math.round(10 + marketMood * 24 + Math.random() * 22)); const startResult = await supabase.rpc("start_auction_lot", { p_auction_id: startAuctionId, p_vehicle: vehicle, p_start_price: price, p_target_bids: targetBids, p_bots: bots });
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
-    setFocusedId(startAuctionId); setStartAuctionId(null);
+    const startedLot = Array.isArray(startResult.data) ? startResult.data[0] : null;
+    setAuctions((current) => current.map((auction) => auction.id === startAuctionId ? { ...auction, status: "live", vehicle, startPrice: price, currentPrice: price, bids: [], bots, targetBids, winner: "", lotNumber: Number(startedLot?.lot_number ?? auction.results.length + 1), endsAt: new Date(startedLot?.ends_at ?? Date.now() + 10000).getTime() } : auction));
+    setFocusedId(startAuctionId); setStartAuctionId(null); setConnectionError("");
+    await loadAuctions();
   };
   const finishAuction = async (auction: Auction) => {
     await supabase.from("auctions").update({ status: "closed", bot_config: { bots: [], nextBotAt: 0, vehicle: auction.vehicle, lotNumber: auction.lotNumber, results: auction.results, lotStartedAt: auction.lotStartedAt } }).eq("id", auction.id);
@@ -297,7 +324,18 @@ export default function Home() {
     if (!user || user.role !== "participant" || auction.status !== "live" || !auction.participants.includes(user.name) || bidBusy.current || auction.bids[0]?.bidder === user.name || optimisticLeader === `${auction.id}:${auction.lotNumber}`) return;
     bidBusy.current = true; setBidPending(true);
     try {
-      const { data } = await supabase.auth.getUser(); if (!data.user) return;
+      const { data } = await supabase.auth.getUser();
+      if (!data.user) { setConnectionError("La sessione è scaduta: esci e accedi nuovamente."); return; }
+      const currentEnrollment = await supabase.from("auction_participants").select("auction_id").eq("auction_id", auction.id).eq("user_id", data.user.id).eq("user_name", user.name).maybeSingle();
+      if (currentEnrollment.error) { setConnectionError(`Iscrizione asta: ${currentEnrollment.error.message}`); return; }
+      if (!currentEnrollment.data) {
+        const reassigned = await supabase.from("auction_participants").update({ user_id: data.user.id }).eq("auction_id", auction.id).eq("user_name", user.name).select("auction_id");
+        if (reassigned.error) { setConnectionError(`Iscrizione asta: ${reassigned.error.message}`); return; }
+        if (!reassigned.data?.length) {
+          const enrolled = await supabase.from("auction_participants").insert({ auction_id: auction.id, user_id: data.user.id, user_name: user.name });
+          if (enrolled.error) { setConnectionError(`Iscrizione asta: ${enrolled.error.message}`); return; }
+        }
+      }
       const result = await supabase.rpc("place_participant_bid", { p_auction_id: auction.id, p_bidder_id: data.user.id, p_bidder_name: user.name });
       if (result.error) { setConnectionError(result.error.message.replace("P0001: ", "")); await loadAuctions(); return; }
       setOptimisticLeader(`${auction.id}:${auction.lotNumber}`); setConnectionError("");
