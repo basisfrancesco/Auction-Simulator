@@ -64,3 +64,5 @@ end $$;
 
 revoke all on function public.join_auction_with_wheel(uuid, text) from public;
 grant execute on function public.join_auction_with_wheel(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
