@@ -1,21 +1,14 @@
--- Ruota di iscrizione: un solo premio per partecipante e per asta.
-create table if not exists public.auction_wheel_spins (
-  id uuid primary key default gen_random_uuid(),
-  auction_id uuid not null references public.auctions(id) on delete cascade,
-  user_id uuid not null,
-  user_name text not null references public.participant_accounts(name),
-  reward numeric not null,
-  balance_after numeric not null check (balance_after >= 0),
-  created_at timestamptz not null default now(),
-  unique (auction_id, user_name)
-);
-
-alter table public.auction_wheel_spins enable row level security;
-drop policy if exists "authenticated wheel spins read" on public.auction_wheel_spins;
-create policy "authenticated wheel spins read" on public.auction_wheel_spins for select to authenticated using (true);
-
+-- I profili selezionabili condividono la sessione anonima del dispositivo.
+-- L'unicità dell'iscrizione deve quindi essere basata sul profilo, non su auth.uid().
 alter table public.auction_participants
   drop constraint if exists auction_participants_auction_id_user_id_key;
+
+delete from public.auction_participants a
+using public.auction_participants b
+where a.auction_id = b.auction_id
+  and a.user_name = b.user_name
+  and a.ctid < b.ctid;
+
 alter table public.auction_participants
   drop constraint if exists auction_participants_auction_id_user_name_key;
 alter table public.auction_participants
@@ -71,5 +64,4 @@ end $$;
 
 revoke all on function public.join_auction_with_wheel(uuid, text) from public;
 grant execute on function public.join_auction_with_wheel(uuid, text) to authenticated;
-
 notify pgrst, 'reload schema';
