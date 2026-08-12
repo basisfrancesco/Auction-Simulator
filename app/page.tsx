@@ -6,7 +6,7 @@ import { estimateVehicleValue, hasExactVehicleValue } from "./vehicle-values";
 
 type User = { name: string; role: "participant" | "admin" };
 type Bid = { id: string; bidder: string; amount: number; at: number; bot: boolean };
-type Bot = { name: string; budget: number; aggression: number; interest?: number; patience?: number; heat?: number };
+type Bot = { name: string; budget: number; aggression: number; appraisal?: number; interest?: number; patience?: number; heat?: number };
 type LotResult = { lotNumber: number; vehicle: string; winner: string; finalPrice: number; bidCount: number };
 type GarageCar = { id: string; vehicle: string; purchasePrice: number; auctionName: string; imageUrl: string };
 type CarListing = { id: string; carId: string; sellerName: string; vehicle: string; imageUrl: string; price: number; createdAt: string };
@@ -45,6 +45,11 @@ const classicSearchUrl = (vehicle: string) => {
     .trim().replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ") || vehicle.trim();
   return `https://www.classic.com/search?${new URLSearchParams({ q: query }).toString()}`;
 };
+const parseUsdAmount = (raw: string) => {
+  const cleaned = raw.replace(/[^\d.,]/g, "").trim();
+  const withoutCents = cleaned.replace(/[.,]\d{2}$/, "");
+  return Number(withoutCents.replace(/[^\d]/g, ""));
+};
 const incrementFor = (price: number, startPrice = price) => {
   const progress = Math.max(1, price / Math.max(startPrice, 1));
   const percentage = progress < 1.12 ? .006 : progress < 1.3 ? .009 : progress < 1.55 ? .013 : .018;
@@ -80,6 +85,11 @@ export default function Home() {
   const [startAuctionId, setStartAuctionId] = useState<string | null>(null);
   const [vehicleDraft, setVehicleDraft] = useState("");
   const [marketValueDraft, setMarketValueDraft] = useState("");
+  const [classicAverageDraft, setClassicAverageDraft] = useState("");
+  const [usdToEur, setUsdToEur] = useState(.92);
+  const [classicExtensionReady, setClassicExtensionReady] = useState(false);
+  const [classicLookupStatus, setClassicLookupStatus] = useState<"idle" | "searching" | "success" | "error">("idle");
+  const [classicLookupMessage, setClassicLookupMessage] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const auctionsRef = useRef<Auction[]>([]);
@@ -91,6 +101,44 @@ export default function Home() {
   const realtimeRefresh = useRef<number | null>(null);
 
   useEffect(() => { auctionsRef.current = auctions; }, [auctions]);
+  useEffect(() => {
+    void fetch("https://api.frankfurter.app/latest?from=USD&to=EUR")
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((data: { rates?: { EUR?: number } }) => { if (data.rates?.EUR) setUsdToEur(data.rates.EUR); })
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    const receiveClassicValue = (event: MessageEvent) => {
+      if (event.source !== window || event.data?.source !== "auction-simulator-classic-extension") return;
+      if (event.data.type === "CLASSIC_EXTENSION_READY") setClassicExtensionReady(true);
+      if (event.data.type === "CLASSIC_LOOKUP_STARTED") setClassicLookupStatus("searching");
+      if (event.data.type === "CLASSIC_LOOKUP_RESULT" && Number(event.data.valueUsd) > 0) {
+        const dollars = Number(event.data.valueUsd);
+        setClassicAverageDraft(new Intl.NumberFormat("en-US").format(dollars));
+        setMarketValueDraft(String(Math.round((dollars * usdToEur) / 500) * 500));
+        setClassicLookupStatus("success");
+        setClassicLookupMessage("Media a un anno importata automaticamente.");
+      }
+      if (event.data.type === "CLASSIC_LOOKUP_ERROR") {
+        setClassicLookupStatus("error");
+        setClassicLookupMessage(event.data.message || "Valore non trovato.");
+      }
+    };
+    window.addEventListener("message", receiveClassicValue);
+    window.postMessage({ source: "auction-simulator-app", type: "CLASSIC_EXTENSION_PING" }, window.location.origin);
+    return () => window.removeEventListener("message", receiveClassicValue);
+  }, [usdToEur]);
+
+  const requestClassicAverage = () => {
+    setClassicLookupMessage("");
+    if (!classicExtensionReady) {
+      setClassicLookupStatus("error");
+      setClassicLookupMessage("Estensione non rilevata: installala e ricarica questa pagina.");
+      return;
+    }
+    setClassicLookupStatus("searching");
+    window.postMessage({ source: "auction-simulator-app", type: "CLASSIC_LOOKUP_REQUEST", vehicle: vehicleDraft, url: classicSearchUrl(vehicleDraft) }, window.location.origin);
+  };
   useEffect(() => {
     if (!optimisticLeader || !user) return;
     const timeout = window.setTimeout(() => {
@@ -273,7 +321,7 @@ export default function Home() {
           const closing = await supabase.rpc("close_auction_lot", { p_auction_id: auction.id });
           if (closing.error) { setConnectionError(`Chiusura lotto: ${closing.error.message}`); return; }
           if (closing.data) await loadAuctions();
-        } else if (tick >= auction.nextBotAt && auction.bids.filter((bid) => bid.bot).length < auction.targetBids) {
+        } else if (tick >= auction.nextBotAt) {
           const step = incrementFor(auction.currentPrice, auction.startPrice); const lastBidder = auction.bids[0]?.bidder;
           const evolvedBots = auction.bots.map((bot) => ({ ...bot, heat: Math.max(0, Math.min(1, (bot.heat ?? .25) + (Math.random() - .53) * .22)) }));
           const eligible = evolvedBots.filter((bot) => {
@@ -287,7 +335,11 @@ export default function Home() {
           });
           if (eligible.length) {
             const bot = eligible[Math.floor(Math.random() * eligible.length)]; const multiplier = Math.random() < bot.aggression * (.16 + (bot.heat ?? .25) * .18) ? (Math.random() < .8 ? 2 : 3) : 1;
-            const amount = Math.min(bot.budget, auction.currentPrice + step * multiplier); const progress = (auction.bids.filter((bid) => bid.bot).length + 1) / auction.targetBids;
+            const gap = bot.budget - auction.currentPrice; const distance = gap / Math.max(bot.budget, 1);
+            const catchUpRate = distance > .6 ? .16 : distance > .35 ? .1 : distance > .15 ? .055 : .025;
+            const rounding = auction.currentPrice < 50000 ? 100 : auction.currentPrice < 250000 ? 500 : auction.currentPrice < 1000000 ? 1000 : 5000;
+            const strategicStep = Math.max(step * multiplier, Math.round((gap * catchUpRate * (.78 + Math.random() * .44)) / rounding) * rounding);
+            const amount = Math.min(bot.budget, auction.currentPrice + strategicStep); const progress = Math.min(1, (auction.bids.filter((bid) => bid.bot).length + 1) / auction.targetBids);
             const mood = (bot.interest ?? .55) + (bot.heat ?? .25); const delay = progress < .3 ? 550 + Math.random() * 1300 : progress < .75 ? 900 + Math.random() * (2800 - mood * 600) : 1700 + Math.random() * (5200 - mood * 1100);
             const nextBotAt = tick + delay;
             const nextBots = evolvedBots.map((entry) => entry.name === bot.name ? { ...entry, heat: Math.min(1, (entry.heat ?? .25) + .18 + Math.random() * .18) } : entry);
@@ -343,17 +395,18 @@ export default function Home() {
     const form = new FormData(event.currentTarget); const price = Number(form.get("price")); const vehicle = String(form.get("vehicle")).trim();
     const estimatedValue = Number(form.get("marketValue")) || estimateVehicleValue(vehicle);
     if (!estimatedValue) { setConnectionError("Modello non riconosciuto: inserisci il valore di mercato stimato prima di avviare il lotto."); return; }
-    const marketMood = .62 + Math.random() * .66;
+    const marketMood = .9 + Math.random() * .2;
     const bots = BOT_NAMES.slice().sort(() => Math.random() - .5).slice(0, 8).map((name, index) => ({
-      name, budget: Math.max(price + incrementFor(price, price), Math.round((estimatedValue * marketMood * (.72 + Math.random() * .35)) / 100) * 100),
+      name, appraisal: estimatedValue, budget: Math.max(price + incrementFor(price, price), Math.round((estimatedValue * marketMood * (.78 + Math.random() * .34)) / 500) * 500),
       aggression: Math.max(.08, .14 + (index % 4) * .16 + Math.random() * .1 + (marketMood - 1) * .18),
       interest: Math.max(.08, Math.min(.98, .16 + Math.random() * .66 + (marketMood - 1) * .3)), patience: .18 + Math.random() * .76, heat: Math.random() * Math.max(.18, marketMood * .42),
     }));
-    const targetBids = Math.max(12, Math.round(10 + marketMood * 24 + Math.random() * 22)); const startResult = await supabase.rpc("start_auction_lot", { p_auction_id: startAuctionId, p_vehicle: vehicle, p_start_price: price, p_target_bids: targetBids, p_bots: bots });
+    const priceDistance = Math.max(1, estimatedValue / Math.max(price, 1));
+    const targetBids = Math.max(24, Math.min(90, Math.round(28 + Math.log2(priceDistance) * 10 + Math.random() * 12))); const startResult = await supabase.rpc("start_auction_lot", { p_auction_id: startAuctionId, p_vehicle: vehicle, p_start_price: price, p_target_bids: targetBids, p_bots: bots });
     if (startResult.error) { setConnectionError(`Avvio lotto: ${startResult.error.message}`); return; }
     const startedLot = Array.isArray(startResult.data) ? startResult.data[0] : null;
     setAuctions((current) => current.map((auction) => auction.id === startAuctionId ? { ...auction, status: "live", vehicle, startPrice: price, currentPrice: price, bids: [], bots, targetBids, winner: "", lotNumber: Number(startedLot?.lot_number ?? auction.results.length + 1), endsAt: new Date(startedLot?.ends_at ?? Date.now() + 10000).getTime() } : auction));
-    setFocusedId(startAuctionId); setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); setConnectionError("");
+    setFocusedId(startAuctionId); setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); setClassicAverageDraft(""); setConnectionError("");
     await loadAuctions();
   };
   const finishAuction = async (auction: Auction) => {
@@ -399,6 +452,6 @@ export default function Home() {
     {externalSaleCarId && <div className="modal-backdrop" onMouseDown={() => { setExternalSaleCarId(null); setExternalSalePrice(null); }}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => { setExternalSaleCarId(null); setExternalSalePrice(null); }}>×</button><div className="eyebrow"><i /> VENDITA ESTERNA</div>{externalSalePrice === null ? <><h2>Inserisci il prezzo.</h2><p>Indica la cifra concordata per <b>{garage.find((car) => car.id === externalSaleCarId)?.vehicle}</b>. Potrai controllarla prima di vendere.</p><form onSubmit={prepareExternalSale}><label>Prezzo concordato (€)<input name="externalSalePrice" type="number" inputMode="numeric" min="100" max="100000000" step="50" placeholder="es. 45.000" autoFocus required /></label><button className="primary" type="submit">CONTINUA <span>→</span></button></form></> : <><h2>Confermi la vendita?</h2><p>Controlla attentamente i dati: dopo la conferma l’auto uscirà dal garage.</p><div className="sale-confirm-summary"><span>AUTOMOBILE</span><strong>{garage.find((car) => car.id === externalSaleCarId)?.vehicle}</strong><span>PREZZO DI VENDITA</span><strong>{euros.format(externalSalePrice)}</strong><span>SALDO ATTUALE</span><strong>{euros.format(balance)}</strong><span>SALDO DOPO LA VENDITA</span><strong className="result-balance">{euros.format(balance + externalSalePrice)}</strong></div><div className="confirmation-actions"><button type="button" onClick={() => setExternalSalePrice(null)}>INDIETRO</button><button className="primary" type="button" disabled={marketPending === externalSaleCarId} onClick={() => void sellCarExternally()}>{marketPending === externalSaleCarId ? "VENDITA…" : "CONFERMA VENDITA"}</button></div></>}</section></div>}
     {purchaseListing && <div className="modal-backdrop" onMouseDown={() => setPurchaseListing(null)}><section className="modal compact-modal purchase-confirm" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setPurchaseListing(null)}>×</button><div className="eyebrow"><i /> CONFERMA ACQUISTO</div><h2>{purchaseListing.vehicle}</h2><p>Acquisti l’auto da <b>{purchaseListing.sellerName}</b>. Il passaggio di proprietà e il pagamento saranno immediati.</p><div className="purchase-summary"><span>PREZZO</span><strong>{euros.format(purchaseListing.price)}</strong><span>SALDO DOPO L’ACQUISTO</span><strong>{euros.format(balance - purchaseListing.price)}</strong></div><div className="confirmation-actions"><button onClick={() => setPurchaseListing(null)}>ANNULLA</button><button className="primary" disabled={marketPending === purchaseListing.id} onClick={() => void buyCar(purchaseListing)}>{marketPending === purchaseListing.id ? "ACQUISTO…" : "CONFERMA ACQUISTO"}</button></div></section></div>}
     {showCreate && <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setShowCreate(false)}>×</button><div className="eyebrow"><i /> NUOVA ASTA</div><h2>Crea un&apos;asta</h2><form onSubmit={addAuction}><label>Nome dell&apos;asta<input name="name" placeholder="es. Supercar d'estate" maxLength={60} autoFocus required /></label><button className="primary" type="submit">CREA ASTA <span>→</span></button></form></section></div>}
-    {startAuctionId !== null && <div className="modal-backdrop" onMouseDown={() => { setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); }}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => { setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); }}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Inserisci l&apos;automobile</h2><p>I bot stimano il proprio limite dal modello e dalla versione, indipendentemente dalla base d’asta.</p><form onSubmit={startAuction}><label>Marca, modello e versione<input name="vehicle" value={vehicleDraft} onChange={(event) => { const vehicle = event.target.value; setVehicleDraft(vehicle); setMarketValueDraft(vehicle.trim().length >= 3 ? String(estimateVehicleValue(vehicle)) : ""); }} placeholder="es. Ferrari 812 Competizione" maxLength={80} autoFocus required /></label>{vehicleDraft.trim().length >= 3 && <><div className="vehicle-estimate recognized"><span>{hasExactVehicleValue(vehicleDraft) ? "VALORE DAL CATALOGO" : "STIMA AUTOMATICA PER MARCA E VERSIONE"}</span><strong>{euros.format(estimateVehicleValue(vehicleDraft))}</strong></div><a className="classic-comps-link" href={classicSearchUrl(vehicleDraft)} target="_blank" rel="noopener noreferrer">CONTROLLA I COMPARABILI SU CLASSIC.COM ↗</a></>}<label>Valore di mercato stimato (€) <small>compilato automaticamente</small><input name="marketValue" type="number" min="100" step="1" value={marketValueDraft} onChange={(event) => setMarketValueDraft(event.target.value)} placeholder="La stima apparirà automaticamente" required /></label><label>Prezzo iniziale (€)<input name="price" type="number" min="100" step="50" placeholder="es. 60.000" required /></label><button className="primary" type="submit">AVVIA LOTTO <span>●</span></button></form></section></div>}
+    {startAuctionId !== null && <div className="modal-backdrop" onMouseDown={() => { setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); setClassicAverageDraft(""); }}><section className="modal compact-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => { setStartAuctionId(null); setVehicleDraft(""); setMarketValueDraft(""); setClassicAverageDraft(""); }}>×</button><div className="eyebrow"><i /> NUOVO LOTTO</div><h2>Inserisci l&apos;automobile</h2><p>I bot stimano il proprio limite dal modello e dalla versione, indipendentemente dalla base d’asta.</p><form onSubmit={startAuction}><label>Marca, modello e versione<input name="vehicle" value={vehicleDraft} onChange={(event) => { const vehicle = event.target.value; setVehicleDraft(vehicle); setMarketValueDraft(vehicle.trim().length >= 3 ? String(estimateVehicleValue(vehicle)) : ""); }} placeholder="es. Ferrari 812 Competizione" maxLength={80} autoFocus required /></label>{vehicleDraft.trim().length >= 3 && <><div className="vehicle-estimate recognized"><span>{hasExactVehicleValue(vehicleDraft) ? "VALORE DAL CATALOGO" : "STIMA AUTOMATICA PER MARCA E VERSIONE"}</span><strong>{euros.format(estimateVehicleValue(vehicleDraft))}</strong></div><a className="classic-comps-link" href={classicSearchUrl(vehicleDraft)} target="_blank" rel="noopener noreferrer">CONTROLLA I COMPARABILI SU CLASSIC.COM ↗</a><div className={"classic-auto-box"}><span className={"classic-extension-state " + (classicExtensionReady ? "ready" : "")}>{classicExtensionReady ? "ESTENSIONE COLLEGATA" : "ESTENSIONE NON RILEVATA"}</span><button type="button" disabled={classicLookupStatus === "searching"} onClick={requestClassicAverage}>{classicLookupStatus === "searching" ? "RICERCA IN CORSO…" : "IMPORTA MEDIA 1 YEAR"}</button>{classicLookupMessage && <p className={"classic-lookup-message " + (classicLookupStatus === "error" ? "error" : "")}>{classicLookupMessage}</p>}</div></>}<label>Media Classic.com · 1 Year (USD) <small>incolla il valore visualizzato</small><input type="text" inputMode="decimal" value={classicAverageDraft} onChange={(event) => { const raw = event.target.value; setClassicAverageDraft(raw); const dollars = parseUsdAmount(raw); if (dollars > 0) setMarketValueDraft(String(Math.round((dollars * usdToEur) / 500) * 500)); }} placeholder="es. 171,280 USD" /></label><div className="fx-note">Cambio applicato: 1 USD = {usdToEur.toFixed(3)} EUR</div><label>Valore di mercato stimato (€) <small>compilato automaticamente</small><input name="marketValue" type="number" min="100" step="1" value={marketValueDraft} onChange={(event) => setMarketValueDraft(event.target.value)} placeholder="La stima apparirà automaticamente" required /></label><label>Prezzo iniziale (€)<input name="price" type="number" min="100" step="50" placeholder="es. 60.000" required /></label><button className="primary" type="submit">AVVIA LOTTO <span>●</span></button></form></section></div>}
   </main>;
 }

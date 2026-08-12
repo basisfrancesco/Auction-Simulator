@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Auction Simulator · Classic Value",
+  "version": "1.0.0",
+  "description": "Recupera la media a un anno da Classic.com e la invia ad Auction Simulator.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["https://www.classic.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://basisfrancesco.github.io/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.classic.com/*"],
+      "js": ["classic-reader.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Auction Simulator · Classic Value" }
+}

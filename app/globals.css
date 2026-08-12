@@ -247,6 +247,8 @@ button{letter-spacing:-.01em}
 .primary:hover{box-shadow:var(--control-shadow);transform:translateY(-2px)}
 .garage-sale-actions{display:grid!important;grid-template-columns:1.25fr 1fr;gap:8px;border:0!important;padding:0!important;margin-top:8px!important}.garage-sale-actions button{margin-top:0!important}
 .market-value-link{display:flex;align-items:center;justify-content:space-between;min-height:42px;margin-top:10px;padding:0 2px;color:var(--muted);text-decoration:none;font-size:10px;font-weight:700;letter-spacing:.04em;border-top:0!important}.market-value-link:hover{color:var(--ink)}.market-value-link span{font-size:15px;transition:transform .25s var(--ease)}.market-value-link:hover span{transform:translate(2px,-2px)}
+.fx-note{margin:-5px 0 2px;text-align:right;color:var(--muted);font-size:9px;letter-spacing:.04em}
+.classic-auto-box{display:grid;gap:8px;padding:12px;border-radius:15px;background:#f2f3f0}.classic-auto-box button{min-height:44px;border-radius:11px;background:#1d1d1f;color:#fff;font-size:10px;font-weight:750;letter-spacing:.04em}.classic-auto-box button:disabled{background:#d9d9dc;color:#777}.classic-extension-state{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:9px}.classic-extension-state:before{content:"";width:7px;height:7px;border-radius:50%;background:#b4b4b7}.classic-extension-state.ready:before{background:#8fbd00;box-shadow:0 0 0 4px rgba(143,189,0,.12)}.classic-lookup-message{margin:0;color:#626267;font-size:10px;line-height:1.4}.classic-lookup-message.error{color:#a33322}
 .wallet-signal{display:flex;align-items:center;gap:7px;margin-top:auto;padding-top:24px;color:#9a9a9f;font-size:10px}.wallet-signal i{width:7px;height:7px;border-radius:50%;background:var(--acid);box-shadow:0 0 0 5px rgba(201,244,63,.1)}
 .garage-count{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:10px;background:#f0f0f2;color:#606065;font-size:9px;font-weight:750;letter-spacing:.06em}
 .participant-wallet{position:relative;isolation:isolate}.participant-wallet:after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.8)}
@@ -315,4 +317,5 @@ input[type="number"]::-webkit-inner-spin-button,input[type="number"]::-webkit-ou
   .primary,.button-primary,.button-secondary,.button-muted,.garage-card-body>button,.garage-sale-actions>button,.confirmation-actions>button,.bid-action>button{min-height:54px}
   .select-wrap:after{right:17px}
   .modal form{gap:14px}.modal label{gap:10px}.modal input{padding:16px 17px}
+  .fx-note{margin-top:-7px;text-align:left;line-height:1.4}
 }
