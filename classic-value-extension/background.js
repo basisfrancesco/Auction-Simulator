@@ -1,17 +1,24 @@
 const requests = new Map();
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "GET_CLASSIC_LOOKUP" && sender.tab?.id) {
     const lookupKey = `request_${sender.tab.id}`;
-    chrome.storage.session.get(lookupKey, (stored) => chrome.tabs.sendMessage(sender.tab.id, { type: "CLASSIC_LOOKUP_CONTEXT", request: stored[lookupKey] || null }));
-    return;
+    chrome.storage.session.get(lookupKey, (stored) => sendResponse({ request: stored[lookupKey] || null }));
+    return true;
   }
   if (message?.type === "START_CLASSIC_LOOKUP" && sender.tab?.id) {
-    chrome.tabs.create({ url: message.url, active: true }, (tab) => {
-      if (!tab.id) return;
-      requests.set(tab.id, { appTabId: sender.tab.id, vehicle: message.vehicle });
-      chrome.storage.session.set({ [`request_${tab.id}`]: { appTabId: sender.tab.id, vehicle: message.vehicle } });
-      chrome.tabs.sendMessage(sender.tab.id, { type: "CLASSIC_LOOKUP_STARTED" });
+    const appTabId = sender.tab.id;
+    chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
+      if (!tab.id || chrome.runtime.lastError) {
+        chrome.tabs.sendMessage(appTabId, { type: "CLASSIC_LOOKUP_ERROR", message: "Non sono riuscito ad aprire Classic.com." });
+        return;
+      }
+      const request = { appTabId, vehicle: message.vehicle };
+      requests.set(tab.id, request);
+      chrome.storage.session.set({ [`request_${tab.id}`]: request }, () => {
+        chrome.tabs.update(tab.id, { url: message.url });
+        chrome.tabs.sendMessage(appTabId, { type: "CLASSIC_LOOKUP_STARTED" });
+      });
     });
     return;
   }

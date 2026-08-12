@@ -46,7 +46,16 @@ const classicSearchUrl = (vehicle: string) => {
   return `https://www.classic.com/search?${new URLSearchParams({ q: query }).toString()}`;
 };
 const parseUsdAmount = (raw: string) => {
-  const cleaned = raw.replace(/[^\d.,]/g, "").trim();
+  const normalized = raw.toLowerCase().trim();
+  const compact = normalized.match(/([\d]+(?:[.,]\d+)?)\s*([kmb])/i);
+  if (compact) {
+    const amount = Number(compact[1].replace(",", "."));
+    const multiplier = compact[2] === "k" ? 1_000 : compact[2] === "m" ? 1_000_000 : 1_000_000_000;
+    return Math.round(amount * multiplier);
+  }
+  const bareCompact = normalized.match(/^\$?\s*(\d{1,3}[.,]\d{1,2})\s*(?:usd)?$/i);
+  if (bareCompact) return Math.round(Number(bareCompact[1].replace(",", ".")) * 1_000_000);
+  const cleaned = normalized.replace(/[^\d.,]/g, "").trim();
   const withoutCents = cleaned.replace(/[.,]\d{2}$/, "");
   return Number(withoutCents.replace(/[^\d]/g, ""));
 };
@@ -128,6 +137,14 @@ export default function Home() {
     window.postMessage({ source: "auction-simulator-app", type: "CLASSIC_EXTENSION_PING" }, window.location.origin);
     return () => window.removeEventListener("message", receiveClassicValue);
   }, [usdToEur]);
+  useEffect(() => {
+    if (classicLookupStatus !== "searching") return;
+    const timeout = window.setTimeout(() => {
+      setClassicLookupStatus("error");
+      setClassicLookupMessage("Classic.com non ha restituito il valore. Controlla la scheda aperta oppure riprova.");
+    }, 60000);
+    return () => window.clearTimeout(timeout);
+  }, [classicLookupStatus]);
 
   const requestClassicAverage = () => {
     setClassicLookupMessage("");

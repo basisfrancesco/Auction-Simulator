@@ -2,17 +2,14 @@ const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mil
 const normalize = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const visible = (element) => Boolean(element && element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
 
-const requestForThisTab = () => new Promise((resolve) => {
-  const timeout = setTimeout(() => resolve(null), 3000);
-  const listener = (message) => {
-    if (message?.type !== "CLASSIC_LOOKUP_CONTEXT") return;
-    clearTimeout(timeout);
-    chrome.runtime.onMessage.removeListener(listener);
-    resolve(message.request);
-  };
-  chrome.runtime.onMessage.addListener(listener);
-  chrome.runtime.sendMessage({ type: "GET_CLASSIC_LOOKUP" });
-});
+const requestForThisTab = async () => {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "GET_CLASSIC_LOOKUP" });
+    return response?.request || null;
+  } catch {
+    return null;
+  }
+};
 
 const bestMarketLink = (vehicle) => {
   const tokens = normalize(vehicle).split(" ").filter((token) => token.length > 1 && !/^\d{4}$/.test(token));
@@ -38,9 +35,13 @@ const readAverage = () => {
   for (const label of labels) {
     let container = label.parentElement;
     for (let depth = 0; container && depth < 5; depth += 1, container = container.parentElement) {
-      const match = container.innerText?.match(/\$\s*([\d,.]+)/);
+      const match = container.innerText?.match(/\$\s*([\d,.]+)\s*([kmb])?/i);
       if (match) {
-        const valueUsd = Number(match[1].replace(/,/g, ""));
+        const suffix = match[2]?.toLowerCase();
+        const compactNumber = suffix || /^[\d]{1,3}[.,]\d{1,2}$/.test(match[1]);
+        const base = compactNumber ? Number(match[1].replace(",", ".")) : Number(match[1].replace(/,/g, ""));
+        const multiplier = suffix === "k" ? 1_000 : suffix === "b" ? 1_000_000_000 : suffix === "m" || compactNumber ? 1_000_000 : 1;
+        const valueUsd = Math.round(base * multiplier);
         if (valueUsd > 0) return valueUsd;
       }
     }

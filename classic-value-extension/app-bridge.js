@@ -10,7 +10,9 @@ window.addEventListener("message", (event) => {
     return;
   }
   if (event.data?.type !== "CLASSIC_LOOKUP_REQUEST") return;
-  chrome.runtime.sendMessage({ type: "START_CLASSIC_LOOKUP", vehicle: event.data.vehicle, url: event.data.url });
+  chrome.runtime.sendMessage({ type: "START_CLASSIC_LOOKUP", vehicle: event.data.vehicle, url: event.data.url }).catch(() => {
+    window.postMessage({ source: EXTENSION_SOURCE, type: "CLASSIC_LOOKUP_ERROR", message: "L’estensione non riesce ad avviare la ricerca. Ricaricala da chrome://extensions." }, window.location.origin);
+  });
 });
 
 chrome.runtime.onMessage.addListener((message) => {
