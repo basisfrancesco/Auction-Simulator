@@ -4,8 +4,8 @@ type ValueRule = { pattern: RegExp; value: number };
 
 const MODEL_VALUES: ValueRule[] = [
   { pattern: /ferrari.*812.*(?:competizione|competezione)/, value: 1_350_000 },
-  { pattern: /ferrari.*laferrari/, value: 3_300_000 }, { pattern: /ferrari.*f40/, value: 2_600_000 },
-  { pattern: /ferrari.*f50/, value: 4_700_000 }, { pattern: /ferrari.*enzo/, value: 3_900_000 },
+  { pattern: /ferrari.*laferrari/, value: 4_200_000 }, { pattern: /ferrari.*f40/, value: 3_340_000 },
+  { pattern: /ferrari.*f50/, value: 7_240_000 }, { pattern: /ferrari.*enzo/, value: 7_440_000 },
   { pattern: /ferrari.*daytona.*sp3/, value: 3_200_000 }, { pattern: /ferrari.*sf90.*xx/, value: 1_050_000 },
   { pattern: /ferrari.*sf90/, value: 470_000 }, { pattern: /ferrari.*812/, value: 360_000 },
   { pattern: /ferrari.*296/, value: 330_000 }, { pattern: /ferrari.*f8/, value: 330_000 },
@@ -93,8 +93,8 @@ export const estimateVehicleValue = (vehicle: string): number => {
   }
 
   const year = yearFrom(vehicle);
-  if (year >= 2010 && year < 2021) value *= .88 + (year - 2010) * .012;
-  else if (year >= 2000 && year < 2010) value *= .78;
+  if (!exact && year >= 2010 && year < 2021) value *= .88 + (year - 2010) * .012;
+  else if (!exact && year >= 2000 && year < 2010) value *= .78;
   else if (year >= 1990 && year < 2000 && !exact) value *= .72;
   else if (year > 0 && year < 1990 && !exact) value *= .8;
 
