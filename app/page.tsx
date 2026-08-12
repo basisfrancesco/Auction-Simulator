@@ -121,6 +121,10 @@ export default function Home() {
       if (event.source !== window || event.data?.source !== "auction-simulator-classic-extension") return;
       if (event.data.type === "CLASSIC_EXTENSION_READY") setClassicExtensionReady(true);
       if (event.data.type === "CLASSIC_LOOKUP_STARTED") setClassicLookupStatus("searching");
+      if (event.data.type === "CLASSIC_LOOKUP_PROGRESS") {
+        setClassicLookupStatus("searching");
+        setClassicLookupMessage(event.data.message || "Ricerca del mercato corretto in corso…");
+      }
       if (event.data.type === "CLASSIC_LOOKUP_RESULT" && Number(event.data.valueUsd) > 0) {
         const dollars = Number(event.data.valueUsd);
         setClassicAverageDraft(new Intl.NumberFormat("en-US").format(dollars));

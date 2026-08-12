@@ -23,6 +23,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  if (message?.type === "CLASSIC_LOOKUP_PROGRESS" && sender.tab?.id) {
+    const lookupKey = `request_${sender.tab.id}`;
+    chrome.storage.session.get(lookupKey, (stored) => {
+      const request = requests.get(sender.tab.id) || stored[lookupKey];
+      if (request) chrome.tabs.sendMessage(request.appTabId, message);
+    });
+    return;
+  }
+
   if (!sender.tab?.id || !["CLASSIC_LOOKUP_RESULT", "CLASSIC_LOOKUP_ERROR"].includes(message?.type)) return;
   const lookupKey = `request_${sender.tab.id}`;
   chrome.storage.session.get(lookupKey, (stored) => {

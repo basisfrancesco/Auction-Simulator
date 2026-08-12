@@ -11,13 +11,38 @@ const requestForThisTab = async () => {
   }
 };
 
-const bestMarketLink = (vehicle) => {
+const marketContext = (link) => {
+  let element = link;
+  let context = `${link.textContent || ""} ${link.getAttribute("href") || ""}`;
+  for (let depth = 0; element.parentElement && depth < 5; depth += 1) {
+    element = element.parentElement;
+    const text = element.innerText?.trim() || "";
+    if (text.length > 900) break;
+    context = `${context} ${text}`;
+  }
+  return normalize(context);
+};
+
+const rankedMarketLinks = (vehicle) => {
+  const requestedYear = Number(vehicle.match(/\b(?:19|20)\d{2}\b/)?.[0] || 0);
   const tokens = normalize(vehicle).split(" ").filter((token) => token.length > 1 && !/^\d{4}$/.test(token));
   return [...document.querySelectorAll('a[href*="/m/"]')]
     .filter(visible)
-    .map((link) => ({ link, score: tokens.filter((token) => normalize(link.textContent || "").includes(token)).length }))
-    .filter(({ score }) => score >= Math.max(1, Math.ceil(tokens.length * .45)))
-    .sort((a, b) => b.score - a.score)[0]?.link;
+    .map((link) => {
+      const context = marketContext(link);
+      const matchedTokens = tokens.filter((token) => context.includes(token));
+      let score = matchedTokens.length * 3;
+      if (matchedTokens.length === tokens.length) score += 5;
+      const years = [...context.matchAll(/\b((?:19|20)\d{2})\b/g)].map((match) => Number(match[1]));
+      if (requestedYear && years.includes(requestedYear)) score += 18;
+      else if (requestedYear && years.length) {
+        const distance = Math.min(...years.map((year) => Math.abs(year - requestedYear)));
+        score += Math.max(-10, 5 - distance * 3);
+      }
+      return { link, score, matchedTokens: matchedTokens.length };
+    })
+    .filter(({ matchedTokens }) => matchedTokens >= Math.max(1, Math.ceil(tokens.length * .6)))
+    .sort((a, b) => b.score - a.score);
 };
 
 const activateOneYear = () => {
@@ -55,11 +80,13 @@ const readAverage = () => {
 
   for (let attempt = 0; attempt < 45; attempt += 1) {
     if (location.pathname.startsWith("/search")) {
-      const market = bestMarketLink(request.vehicle);
-      if (market) {
-        location.href = market.href;
+      const markets = rankedMarketLinks(request.vehicle);
+      const unambiguous = markets[0] && (!markets[1] || markets[0].score - markets[1].score >= 4);
+      if (unambiguous) {
+        location.href = markets[0].link.href;
         return;
       }
+      if (markets.length > 1 && attempt === 8) chrome.runtime.sendMessage({ type: "CLASSIC_LOOKUP_PROGRESS", message: "Ci sono più versioni compatibili: seleziona nella scheda Classic.com quella dell’anno corretto." });
     } else if (location.pathname.startsWith("/m/")) {
       if (activateOneYear()) {
         await sleep(1200);
@@ -73,5 +100,5 @@ const readAverage = () => {
     await sleep(1000);
   }
 
-  chrome.runtime.sendMessage({ type: "CLASSIC_LOOKUP_ERROR", message: "Non ho trovato automaticamente la media a un anno. Verifica che Classic.com mostri il mercato corretto." });
+  chrome.runtime.sendMessage({ type: "CLASSIC_LOOKUP_ERROR", message: "Non ho trovato automaticamente un mercato univoco. Seleziona su Classic.com la versione dell’anno corretto e riprova." });
 })();
