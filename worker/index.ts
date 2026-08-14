@@ -29,15 +29,17 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const catalogCors = { "access-control-allow-origin": "*", "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "content-type" };
 
+    if (url.pathname === "/api/catalog-import" && request.method === "OPTIONS") return new Response(null, { status: 204, headers: catalogCors });
     if (url.pathname === "/api/catalog-import" && request.method === "POST") {
       try {
         const body = await request.json() as { url?: string };
         const catalog = await importCatalog(body.url || "");
-        return Response.json(catalog, { headers: { "cache-control": "no-store" } });
+        return Response.json(catalog, { headers: { "cache-control": "no-store", ...catalogCors } });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Importazione non riuscita.";
-        return Response.json({ error: message }, { status: 400 });
+        return Response.json({ error: message }, { status: 400, headers: catalogCors });
       }
     }
 

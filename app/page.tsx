@@ -36,6 +36,7 @@ const WHEEL_REWARDS = Array.from({ length: 50 }, (_, index) => index % 5 === 4 ?
 const wheelColor = (reward: number) => reward === 5000000 ? "#ffb000" : reward === 2000000 ? "#ff6b35" : reward < 0 ? "#e5422b" : reward === 750000 ? "#70d7ff" : reward === 250000 ? "#a98cff" : "#d9ff43";
 const wheelBackground = `conic-gradient(${WHEEL_REWARDS.map((reward, index) => `${wheelColor(reward)} ${index * 2}% ${(index + 1) * 2}%`).join(",")})`;
 const euros = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
+const DEFAULT_IMPORT_API_URL = "https://auction-simulator-italia.satiny-clock-7682.chatgpt.site";
 const classicSearchUrl = (vehicle: string) => {
   const query = vehicle
     .replace(/\([^)]*\)|\[[^\]]*\]/g, " ")
@@ -418,8 +419,10 @@ export default function Home() {
     event.preventDefault(); setImportPending(true); setConnectionError("");
     try {
       const url = String(new FormData(event.currentTarget).get("catalogUrl") || "").trim();
-      const apiBase = process.env.NEXT_PUBLIC_IMPORT_API_URL?.replace(/\/$/, "") || "";
+      const apiBase = process.env.NEXT_PUBLIC_IMPORT_API_URL?.replace(/\/$/, "") || DEFAULT_IMPORT_API_URL;
       const response = await fetch(`${apiBase}/api/catalog-import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }) });
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) throw new Error(`Il servizio di importazione non ha restituito dati validi (${response.status}).`);
       const data = await response.json() as ImportedCatalog & { error?: string };
       if (!response.ok) throw new Error(data.error || "Importazione non riuscita.");
       const convertedLots = data.lots.map((lot) => {
