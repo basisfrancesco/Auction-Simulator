@@ -12,6 +12,7 @@ export type ImportedCatalogLot = {
   estimateHigh: number | null;
   resultPrice: number | null;
   resultStatus: string;
+  valuationSource: "estimate-range" | "single-estimate" | "result-fallback" | "missing";
   marketValue: number;
   startPrice: number;
   imageUrl: string;
@@ -80,7 +81,21 @@ function normalizeRmLot(item: RmLot, index: number, sourceUrl: string): Imported
   const resultPrice = sold && value.values.length === 1 ? value.values[0] : null;
   const estimateLow = estimate.values[0] ?? null;
   const estimateHigh = estimate.values[1] ?? estimateLow;
-  const marketValue = Math.round((resultPrice || estimateHigh || estimateLow || 0) / 500) * 500;
+  const hasEstimateRange = estimateLow !== null && estimateHigh !== null && estimateHigh > estimateLow;
+  const estimatedValue = hasEstimateRange
+    ? estimateLow + (estimateHigh - estimateLow) * .6
+    : estimateLow;
+  // A realised price is evidence of one transaction, not an appraisal. When RM removes
+  // the pre-sale estimate after the auction, keep the result only as an explicit fallback.
+  const fallbackValue = resultPrice === null ? 0 : resultPrice * 1.1;
+  const marketValue = Math.round(((estimatedValue ?? fallbackValue) || 0) / 500) * 500;
+  const valuationSource: ImportedCatalogLot["valuationSource"] = hasEstimateRange
+    ? "estimate-range"
+    : estimateLow !== null
+      ? "single-estimate"
+      : resultPrice !== null
+        ? "result-fallback"
+        : "missing";
   const category = categoryFor(item);
   return {
     sourceId: item.id || item.referenceId || `${index + 1}`,
@@ -94,6 +109,7 @@ function normalizeRmLot(item: RmLot, index: number, sourceUrl: string): Imported
     estimateHigh,
     resultPrice,
     resultStatus: (item.valueType || "").trim(),
+    valuationSource,
     marketValue,
     startPrice: Math.max(100, Math.round((marketValue * .62) / 500) * 500),
     imageUrl: item.crop || "",
@@ -116,10 +132,16 @@ export async function importCatalog(rawUrl: string, fetcher: typeof fetch = fetc
   const lots = data.items.map((item, index) => normalizeRmLot(item, index, parsed.sourceUrl))
     .sort((a, b) => a.position - b.position || a.sourceLotNumber.localeCompare(b.sourceLotNumber));
   const excluded = lots.filter((lot) => !lot.included).length;
+  const fallbackLots = lots.filter((lot) => lot.included && lot.valuationSource === "result-fallback").length;
+  const missingLots = lots.filter((lot) => lot.included && lot.valuationSource === "missing").length;
   return {
     ...parsed,
     name: (data.items[0]?.header || parsed.sourceKey).replace(/\s+/g, " ").trim(),
     lots,
-    warnings: excluded ? [`${excluded} lotti non automobilistici sono stati esclusi automaticamente.`] : [],
+    warnings: [
+      ...(excluded ? [`${excluded} lotti non automobilistici sono stati esclusi automaticamente.`] : []),
+      ...(fallbackLots ? [`${fallbackLots} auto non hanno più una stima pubblica: il valore proposto è un fallback basato sul risultato di vendita (+10%) e va verificato.`] : []),
+      ...(missingLots ? [`${missingLots} auto non hanno né stima né risultato e richiedono un valore manuale.`] : []),
+    ],
   };
 }
