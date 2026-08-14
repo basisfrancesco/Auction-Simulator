@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { importCatalog } from "../lib/catalog-import";
 
 interface Env {
   ASSETS: Fetcher;
@@ -28,6 +29,17 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/api/catalog-import" && request.method === "POST") {
+      try {
+        const body = await request.json() as { url?: string };
+        const catalog = await importCatalog(body.url || "");
+        return Response.json(catalog, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Importazione non riuscita.";
+        return Response.json({ error: message }, { status: 400 });
+      }
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
